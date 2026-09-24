@@ -49,14 +49,15 @@ type seasonNFO struct {
 }
 
 type episodeNFO struct {
-	XMLName   xml.Name `xml:"episodedetails"`
-	Title     string   `xml:"title"`
-	Season    string   `xml:"season"`
-	Episode   string   `xml:"episode"`
-	Plot      string   `xml:"plot,omitempty"`
-	Aired     string   `xml:"aired,omitempty"`
-	TMDBID    string   `xml:"tmdbid,omitempty"`
-	ShowTitle string   `xml:"showtitle,omitempty"`
+	XMLName   xml.Name    `xml:"episodedetails"`
+	Title     string      `xml:"title"`
+	Season    string      `xml:"season"`
+	Episode   string      `xml:"episode"`
+	Plot      string      `xml:"plot,omitempty"`
+	Aired     string      `xml:"aired,omitempty"`
+	TMDBID    string      `xml:"tmdbid,omitempty"`
+	ShowTitle string      `xml:"showtitle,omitempty"`
+	Ratings   *nfoRatings `xml:"ratings,omitempty"`
 }
 
 var nfoRootCloseRe = regexp.MustCompile(`(?i)</(?:movie|tvshow)\s*>`)
@@ -313,7 +314,7 @@ func writeSeasonNFO(path string, season int, title, plot, premiered string) erro
 	return writeXML(path, nfo)
 }
 
-func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season, episode int) error {
+func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season, episode int, rating float64, votes int) error {
 	nfo := episodeNFO{
 		Title:     strings.TrimSpace(title),
 		Season:    fmt.Sprintf("%d", season),
@@ -322,6 +323,15 @@ func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season,
 		Aired:     strings.TrimSpace(aired),
 		TMDBID:    strings.TrimSpace(tmdbID),
 		ShowTitle: strings.TrimSpace(showTitle),
+	}
+	if rating > 0 {
+		nfo.Ratings = &nfoRatings{Rating: nfoRating{
+			Name:    "themoviedb",
+			Max:     "10",
+			Default: "true",
+			Value:   strconv.FormatFloat(rating, 'f', -1, 64),
+			Votes:   votes,
+		}}
 	}
 	return writeXML(path, nfo)
 }

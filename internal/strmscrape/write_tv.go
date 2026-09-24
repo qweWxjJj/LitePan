@@ -30,6 +30,8 @@ type tmdbEpisodeDetail struct {
 	StillPath     string
 	EpisodeType   string // standard|mid_season|finale 等
 	ID            int
+	Rating        float64
+	VoteCount     int
 }
 
 type tmdbImageDownloader interface {
@@ -172,7 +174,7 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 				if title == "" {
 					title = fmt.Sprintf("第 %d 集", ep.EpisodeNumber)
 				}
-				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber); err != nil {
+				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount); err != nil {
 					return fmt.Errorf("写入 S%02dE%02d NFO：%w", season, ep.EpisodeNumber, err)
 				}
 			}
@@ -258,6 +260,8 @@ func fetchSeasonDetail(ctx context.Context, client *tmdb.Client, tmdbID string, 
 			AirDate:       strings.TrimSpace(anyString(em["air_date"])),
 			StillPath:     strings.TrimSpace(anyString(em["still_path"])),
 			EpisodeType:   strings.ToLower(strings.TrimSpace(anyString(em["episode_type"]))),
+			Rating:        anyFloat64(em["vote_average"]),
+			VoteCount:     intValue(em["vote_count"]),
 		}
 		if id := asInt(em["id"]); id != nil {
 			ep.ID = *id

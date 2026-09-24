@@ -243,7 +243,7 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		t.Fatalf("season nfo unexpected: %s", text)
 	}
 	epNFO := filepath.Join(root, "Show.S01E01.nfo")
-	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1); err != nil {
+	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120); err != nil {
 		t.Fatal(err)
 	}
 	body, err = os.ReadFile(epNFO)
@@ -256,6 +256,15 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 	}
 	if !strings.Contains(text, "<showtitle>三体</showtitle>") {
 		t.Fatalf("missing showtitle: %s", text)
+	}
+	for _, expected := range []string{
+		`<rating name="themoviedb" max="10" default="true">`,
+		`<value>8.6</value>`,
+		`<votes>120</votes>`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("episode nfo missing %q: %s", expected, text)
+		}
 	}
 }
 
