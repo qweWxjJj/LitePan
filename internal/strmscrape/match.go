@@ -14,18 +14,23 @@ import (
 )
 
 type tmdbInfo struct {
-	TMDBID       string
-	Title        string
-	Original     string
-	Year         *int
-	Plot         string
-	PosterPath   string
-	BackdropPath string
-	Actors       []tmdbActor
-	LogoPath     string
-	MediaType    string
-	Doubt        bool
-	EpisodeCount int // 默认全剧集数；刮削时会按本地已有季收窄
+	TMDBID        string
+	Title         string
+	Original      string
+	Year          *int
+	Plot          string
+	PosterPath    string
+	BackdropPath  string
+	Actors        []tmdbActor
+	LogoPath      string
+	MediaType     string
+	Doubt         bool
+	EpisodeCount  int // 默认全剧集数；刮削时会按本地已有季收窄
+	Rating        float64
+	VoteCount     int
+	Collection    string
+	OriginalLang  string
+	CreditsLoaded bool
 }
 
 type tmdbActor struct {
@@ -36,6 +41,7 @@ type tmdbActor struct {
 }
 
 func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGroup) (*tmdbInfo, error) {
+	withActors := s.GetSettings().Actors
 	mediaType := inferMediaType(g)
 	folderName := workDisplayName(g)
 	dirParsed := rules.NormalizeParsedMedia(rules.ParseDirName(folderName))
@@ -46,20 +52,20 @@ func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGrou
 		fileParses = append(fileParses, rules.NormalizeParsedMedia(rules.ParseFilenameStrict(stem+".mkv")))
 	}
 	if meta, ok := readWorkNFOMeta(g, mediaType); ok && strings.TrimSpace(meta.TMDBID) != "" {
-		if info, err := lookupTMDBInfo(ctx, client, meta.TMDBID, mediaType); err == nil {
+		if info, err := lookupTMDBInfo(ctx, client, meta.TMDBID, mediaType, withActors); err == nil {
 			return info, nil
 		}
 	}
 
 	if id := rules.FindTMDBIDInName(folderName); id != "" {
-		if info, err := lookupTMDBInfo(ctx, client, id, mediaType); err == nil {
+		if info, err := lookupTMDBInfo(ctx, client, id, mediaType, withActors); err == nil {
 			return info, nil
 		}
 	}
 	for _, e := range g.entries {
 		stem := strings.TrimSuffix(filepath.Base(e.absPath), filepath.Ext(e.absPath))
 		if id := rules.FindTMDBIDInName(stem); id != "" {
-			if info, err := lookupTMDBInfo(ctx, client, id, mediaType); err == nil {
+			if info, err := lookupTMDBInfo(ctx, client, id, mediaType, withActors); err == nil {
 				return info, nil
 			}
 		}
@@ -85,10 +91,10 @@ func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGrou
 		return nil, fmt.Errorf("无法解析标题")
 	}
 
-	info, err := searchTMDBInfo(ctx, client, title, year, mediaType)
+	info, err := searchTMDBInfo(ctx, client, title, year, mediaType, withActors)
 	if err != nil && mediaType == MediaTypeTV {
 		// 误判成剧集时回退电影搜索
-		info, err = searchTMDBInfo(ctx, client, title, year, MediaTypeMovie)
+		info, err = searchTMDBInfo(ctx, client, title, year, MediaTypeMovie, withActors)
 	}
 	if err != nil {
 		return nil, err
@@ -103,7 +109,7 @@ func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGrou
 	return info, nil
 }
 
-func lookupTMDBInfo(ctx context.Context, client *tmdb.Client, id, mediaType string) (*tmdbInfo, error) {
+func lookupTMDBInfo(ctx context.Context, client *tmdb.Client, id, mediaType string, withActors bool) (*tmdbInfo, error) {
 	order := []string{mediaType}
 	if mediaType == MediaTypeTV {
 		order = append(order, MediaTypeMovie)
@@ -112,7 +118,7 @@ func lookupTMDBInfo(ctx context.Context, client *tmdb.Client, id, mediaType stri
 	}
 	var lastErr error
 	for _, mt := range order {
-		raw, err := client.Lookup(ctx, id, mt)
+		raw, err := client.LookupWithAppend(ctx, id, mt, actorAppendResponse(mt, withActors)...)
 		if err != nil {
 			lastErr = err
 			continue
@@ -130,7 +136,7 @@ func lookupTMDBInfo(ctx context.Context, client *tmdb.Client, id, mediaType stri
 	return nil, lastErr
 }
 
-func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year *int, mediaType string) (*tmdbInfo, error) {
+func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year *int, mediaType string, withActors bool) (*tmdbInfo, error) {
 	results, err := client.Search(ctx, title, year, mediaType)
 	if err != nil {
 		return nil, err
@@ -159,12 +165,32 @@ func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year
 		}
 		return nil, fmt.Errorf("没有标题相符的结果")
 	}
-	info, err := decodeTMDBInfo(mustRaw(best), mediaType)
+	searchInfo, err := decodeTMDBInfo(mustRaw(best), mediaType)
+	if err != nil {
+		return nil, err
+	}
+	// 搜索结果不包含 belongs_to_collection；命中后统一读取详情，确保合集、
+	// 评分等只在详情接口提供的元数据也能稳定写入 NFO。
+	detailRaw, err := client.LookupWithAppend(ctx, searchInfo.TMDBID, mediaType, actorAppendResponse(mediaType, withActors)...)
+	if err != nil {
+		return nil, fmt.Errorf("获取 TMDB 详情：%w", err)
+	}
+	info, err := decodeTMDBInfo(detailRaw, mediaType)
 	if err != nil {
 		return nil, err
 	}
 	info.Doubt = doubt
 	return &info, nil
+}
+
+func actorAppendResponse(mediaType string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	if mediaType == MediaTypeTV {
+		return []string{"aggregate_credits"}
+	}
+	return []string{"credits"}
 }
 
 func pickTMDBScrapeMatch(results []map[string]any, year *int, mediaType, title string) (map[string]any, bool) {
@@ -219,10 +245,10 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	// 目标 NFO 不存在或不是标准 NFO（如压制组信息文件）都重写；后者直接覆盖。
 	if nfoWriteNeeded(overwrite, nfo) {
 		if mediaType == MediaTypeTV {
-			if err := writeTVShowNFO(nfo, info.Title, info.TMDBID, info.Plot, info.Year, actors...); err != nil {
+			if err := writeWorkNFOWithMetadata(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount, ""); err != nil {
 				return 0, err
 			}
-		} else if err := writeMovieNFO(nfo, info.Title, info.TMDBID, info.Plot, info.Year, actors...); err != nil {
+		} else if err := writeWorkNFOWithMetadata(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount, info.Collection); err != nil {
 			return 0, err
 		}
 	} else if cfg.Actors {
@@ -235,7 +261,7 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		}
 	}
 	if (overwrite || !fileExists(poster)) && strings.TrimSpace(info.PosterPath) != "" {
-		data, err := client.DownloadImage(ctx, info.PosterPath, "w500")
+		data, err := client.DownloadImage(ctx, info.PosterPath, artworkDownloadSize)
 		if err != nil {
 			return 0, err
 		}
@@ -275,26 +301,27 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 }
 
 func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, cfg Settings) (tmdbInfo, error) {
-	appendTo := []string{}
-	if cfg.Actors {
+	var payload map[string]any
+	if cfg.Actors && !info.CreditsLoaded {
+		appendTo := []string{}
 		if info.MediaType == MediaTypeTV {
 			appendTo = append(appendTo, "aggregate_credits")
 		} else {
 			appendTo = append(appendTo, "credits")
 		}
-	}
-	raw, err := client.LookupWithAppend(ctx, info.TMDBID, info.MediaType, appendTo...)
-	if err != nil {
-		return info, fmt.Errorf("获取 TMDB 扩展信息：%w", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return info, fmt.Errorf("解析 TMDB 扩展信息：%w", err)
-	}
-	if cfg.Fanart {
-		info.BackdropPath = strings.TrimSpace(anyString(payload["backdrop_path"]))
-	}
-	if cfg.Actors {
+		raw, err := client.LookupWithAppend(ctx, info.TMDBID, info.MediaType, appendTo...)
+		if err != nil {
+			return info, fmt.Errorf("获取 TMDB 扩展信息：%w", err)
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return info, fmt.Errorf("解析 TMDB 扩展信息：%w", err)
+		}
+		if cfg.Fanart {
+			info.BackdropPath = strings.TrimSpace(anyString(payload["backdrop_path"]))
+		}
+		if language := strings.TrimSpace(anyString(payload["original_language"])); language != "" {
+			info.OriginalLang = language
+		}
 		creditsKey := "credits"
 		if info.MediaType == MediaTypeTV {
 			creditsKey = "aggregate_credits"
@@ -306,7 +333,7 @@ func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, c
 		if imageErr != nil {
 			return info, fmt.Errorf("获取 TMDB Logo：%w", imageErr)
 		}
-		info.LogoPath = selectTMDBLogo(images, cfg.TmdbLanguage, anyString(payload["original_language"]))
+		info.LogoPath = selectTMDBLogo(images, cfg.TmdbLanguage, info.OriginalLang)
 	}
 	return info, nil
 }
@@ -565,17 +592,55 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 	if n := asInt(m["number_of_episodes"]); n != nil && *n > 0 {
 		epCount = *n
 	}
+	creditsKey := "credits"
+	if mediaType == MediaTypeTV {
+		creditsKey = "aggregate_credits"
+	}
+	_, creditsLoaded := m[creditsKey]
 	return tmdbInfo{
-		TMDBID:       id,
-		Title:        title,
-		Original:     original,
-		Year:         year,
-		Plot:         plot,
-		PosterPath:   poster,
-		BackdropPath: backdrop,
-		MediaType:    mediaType,
-		EpisodeCount: epCount,
+		TMDBID:        id,
+		Title:         title,
+		Original:      original,
+		Year:          year,
+		Plot:          plot,
+		PosterPath:    poster,
+		BackdropPath:  backdrop,
+		MediaType:     mediaType,
+		EpisodeCount:  epCount,
+		Rating:        anyFloat64(m["vote_average"]),
+		VoteCount:     intValue(m["vote_count"]),
+		Collection:    collectionName(m["belongs_to_collection"]),
+		OriginalLang:  strings.TrimSpace(anyString(m["original_language"])),
+		Actors:        decodeTMDBActors(m[creditsKey], 20),
+		CreditsLoaded: creditsLoaded,
 	}, nil
+}
+
+func anyFloat64(v any) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case json.Number:
+		n, _ := value.Float64()
+		return n
+	case string:
+		n, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+func intValue(v any) int {
+	if n := asInt(v); n != nil {
+		return *n
+	}
+	return 0
+}
+
+func collectionName(v any) string {
+	collection, _ := v.(map[string]any)
+	return strings.TrimSpace(anyString(collection["name"]))
 }
 
 func mustRaw(m map[string]any) json.RawMessage {

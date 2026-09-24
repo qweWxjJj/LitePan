@@ -6,16 +6,35 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 type workNFO struct {
 	XMLName xml.Name
-	Title   string     `xml:"title"`
-	Year    string     `xml:"year,omitempty"`
-	TMDBID  string     `xml:"tmdbid,omitempty"`
-	Plot    string     `xml:"plot,omitempty"`
-	Actors  []nfoActor `xml:"actor,omitempty"`
+	Title   string      `xml:"title"`
+	Year    string      `xml:"year,omitempty"`
+	TMDBID  string      `xml:"tmdbid,omitempty"`
+	Plot    string      `xml:"plot,omitempty"`
+	Ratings *nfoRatings `xml:"ratings,omitempty"`
+	Set     *nfoSet     `xml:"set,omitempty"`
+	Actors  []nfoActor  `xml:"actor,omitempty"`
+}
+
+type nfoRatings struct {
+	Rating nfoRating `xml:"rating"`
+}
+
+type nfoRating struct {
+	Name    string `xml:"name,attr"`
+	Max     string `xml:"max,attr"`
+	Default string `xml:"default,attr"`
+	Value   string `xml:"value"`
+	Votes   int    `xml:"votes"`
+}
+
+type nfoSet struct {
+	Name string `xml:"name"`
 }
 
 type nfoActor struct {
@@ -228,12 +247,28 @@ func writeTVShowNFO(path, title, tmdbID, plot string, year *int, actors ...nfoAc
 }
 
 func writeWorkNFO(path, root, title, tmdbID, plot string, year *int, actors []nfoActor) error {
+	return writeWorkNFOWithMetadata(path, root, title, tmdbID, plot, year, actors, 0, 0, "")
+}
+
+func writeWorkNFOWithMetadata(path, root, title, tmdbID, plot string, year *int, actors []nfoActor, rating float64, votes int, collectionName string) error {
 	nfo := workNFO{
 		XMLName: xml.Name{Local: root},
 		Title:   strings.TrimSpace(title),
 		TMDBID:  strings.TrimSpace(tmdbID),
 		Plot:    strings.TrimSpace(plot),
 		Actors:  actors,
+	}
+	if rating > 0 {
+		nfo.Ratings = &nfoRatings{Rating: nfoRating{
+			Name:    "themoviedb",
+			Max:     "10",
+			Default: "true",
+			Value:   strconv.FormatFloat(rating, 'f', -1, 64),
+			Votes:   votes,
+		}}
+	}
+	if collectionName = strings.TrimSpace(collectionName); collectionName != "" {
+		nfo.Set = &nfoSet{Name: collectionName}
 	}
 	if year != nil && *year > 0 {
 		nfo.Year = fmt.Sprintf("%d", *year)
