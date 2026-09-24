@@ -324,26 +324,25 @@ func TestNFOOverwriteNonStandard(t *testing.T) {
 	}
 }
 
-func TestMovieNFOWritesTMDBRatingAndCollection(t *testing.T) {
+func TestMovieNFOWritesTMDBRating(t *testing.T) {
 	raw := json.RawMessage(`{
 		"id": 11,
 		"title": "Star Wars",
 		"release_date": "1977-05-25",
 		"overview": "A long time ago...",
 		"vote_average": 8.2,
-		"vote_count": 22061,
-		"belongs_to_collection": {"id": 10, "name": "Star Wars Collection"}
+		"vote_count": 22061
 	}`)
 	info, err := decodeTMDBInfo(raw, MediaTypeMovie)
 	if err != nil {
 		t.Fatalf("解析 TMDB 详情失败: %v", err)
 	}
-	if info.Rating != 8.2 || info.VoteCount != 22061 || info.Collection != "Star Wars Collection" {
+	if info.Rating != 8.2 || info.VoteCount != 22061 {
 		t.Fatalf("详情字段解析错误: %+v", info)
 	}
 
 	path := filepath.Join(t.TempDir(), "movie.nfo")
-	if err := writeWorkNFOWithMetadata(path, "movie", info.Title, info.TMDBID, info.Plot, info.Year, nil, info.Rating, info.VoteCount, info.Collection); err != nil {
+	if err := writeWorkNFOWithRating(path, "movie", info.Title, info.TMDBID, info.Plot, info.Year, nil, info.Rating, info.VoteCount); err != nil {
 		t.Fatalf("写 NFO 失败: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -355,8 +354,6 @@ func TestMovieNFOWritesTMDBRatingAndCollection(t *testing.T) {
 		`<rating name="themoviedb" max="10" default="true">`,
 		`<value>8.2</value>`,
 		`<votes>22061</votes>`,
-		`<set>`,
-		`<name>Star Wars Collection</name>`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("NFO 缺少 %q:\n%s", expected, text)

@@ -28,7 +28,6 @@ type tmdbInfo struct {
 	EpisodeCount  int // 默认全剧集数；刮削时会按本地已有季收窄
 	Rating        float64
 	VoteCount     int
-	Collection    string
 	OriginalLang  string
 	CreditsLoaded bool
 }
@@ -169,8 +168,7 @@ func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year
 	if err != nil {
 		return nil, err
 	}
-	// 搜索结果不包含 belongs_to_collection；命中后统一读取详情，确保合集、
-	// 评分等只在详情接口提供的元数据也能稳定写入 NFO。
+	// 命中后统一读取详情，确保评分等详情元数据能稳定写入 NFO。
 	detailRaw, err := client.LookupWithAppend(ctx, searchInfo.TMDBID, mediaType, actorAppendResponse(mediaType, withActors)...)
 	if err != nil {
 		return nil, fmt.Errorf("获取 TMDB 详情：%w", err)
@@ -245,10 +243,10 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	// 目标 NFO 不存在或不是标准 NFO（如压制组信息文件）都重写；后者直接覆盖。
 	if nfoWriteNeeded(overwrite, nfo) {
 		if mediaType == MediaTypeTV {
-			if err := writeWorkNFOWithMetadata(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount, ""); err != nil {
+			if err := writeWorkNFOWithRating(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount); err != nil {
 				return 0, err
 			}
-		} else if err := writeWorkNFOWithMetadata(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount, info.Collection); err != nil {
+		} else if err := writeWorkNFOWithRating(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount); err != nil {
 			return 0, err
 		}
 	} else if cfg.Actors {
@@ -609,7 +607,6 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 		EpisodeCount:  epCount,
 		Rating:        anyFloat64(m["vote_average"]),
 		VoteCount:     intValue(m["vote_count"]),
-		Collection:    collectionName(m["belongs_to_collection"]),
 		OriginalLang:  strings.TrimSpace(anyString(m["original_language"])),
 		Actors:        decodeTMDBActors(m[creditsKey], 20),
 		CreditsLoaded: creditsLoaded,
@@ -636,11 +633,6 @@ func intValue(v any) int {
 		return *n
 	}
 	return 0
-}
-
-func collectionName(v any) string {
-	collection, _ := v.(map[string]any)
-	return strings.TrimSpace(anyString(collection["name"]))
 }
 
 func mustRaw(m map[string]any) json.RawMessage {

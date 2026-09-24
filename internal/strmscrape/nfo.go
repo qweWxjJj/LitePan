@@ -17,7 +17,6 @@ type workNFO struct {
 	TMDBID  string      `xml:"tmdbid,omitempty"`
 	Plot    string      `xml:"plot,omitempty"`
 	Ratings *nfoRatings `xml:"ratings,omitempty"`
-	Set     *nfoSet     `xml:"set,omitempty"`
 	Actors  []nfoActor  `xml:"actor,omitempty"`
 }
 
@@ -31,10 +30,6 @@ type nfoRating struct {
 	Default string `xml:"default,attr"`
 	Value   string `xml:"value"`
 	Votes   int    `xml:"votes"`
-}
-
-type nfoSet struct {
-	Name string `xml:"name"`
 }
 
 type nfoActor struct {
@@ -247,10 +242,10 @@ func writeTVShowNFO(path, title, tmdbID, plot string, year *int, actors ...nfoAc
 }
 
 func writeWorkNFO(path, root, title, tmdbID, plot string, year *int, actors []nfoActor) error {
-	return writeWorkNFOWithMetadata(path, root, title, tmdbID, plot, year, actors, 0, 0, "")
+	return writeWorkNFOWithRating(path, root, title, tmdbID, plot, year, actors, 0, 0)
 }
 
-func writeWorkNFOWithMetadata(path, root, title, tmdbID, plot string, year *int, actors []nfoActor, rating float64, votes int, collectionName string) error {
+func writeWorkNFOWithRating(path, root, title, tmdbID, plot string, year *int, actors []nfoActor, rating float64, votes int) error {
 	nfo := workNFO{
 		XMLName: xml.Name{Local: root},
 		Title:   strings.TrimSpace(title),
@@ -266,9 +261,6 @@ func writeWorkNFOWithMetadata(path, root, title, tmdbID, plot string, year *int,
 			Value:   strconv.FormatFloat(rating, 'f', -1, 64),
 			Votes:   votes,
 		}}
-	}
-	if collectionName = strings.TrimSpace(collectionName); collectionName != "" {
-		nfo.Set = &nfoSet{Name: collectionName}
 	}
 	if year != nil && *year > 0 {
 		nfo.Year = fmt.Sprintf("%d", *year)
