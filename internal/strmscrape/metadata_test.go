@@ -361,6 +361,47 @@ func TestMovieNFOWritesTMDBRating(t *testing.T) {
 	}
 }
 
+func TestDecodeTMDBActorsHandlesAggregateCreditsNullFields(t *testing.T) {
+	var credits any
+	if err := json.Unmarshal([]byte(`{
+		"cast": [{
+			"name": "测试演员",
+			"character": null,
+			"profile_path": null,
+			"roles": [{"character": "测试角色", "episode_count": 8}],
+			"order": 0
+		}]
+	}`), &credits); err != nil {
+		t.Fatal(err)
+	}
+
+	actors := decodeTMDBActors(credits, 20)
+	if len(actors) != 1 {
+		t.Fatalf("actors=%+v", actors)
+	}
+	if actors[0].Name != "测试演员" || actors[0].Role != "测试角色" || actors[0].ProfilePath != "" {
+		t.Fatalf("聚合演员字段解析错误: %+v", actors[0])
+	}
+
+	path := filepath.Join(t.TempDir(), "tvshow.nfo")
+	if err := writeWorkNFOWithRating(path, "tvshow", "测试剧集", "1", "", nil, buildNFOActors(nil, actors), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{"<name>测试演员</name>", "<role>测试角色</role>"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("NFO 缺少 %q:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") || strings.Contains(text, "<thumb>") {
+		t.Fatalf("NFO 不应写入 null 字段:\n%s", text)
+	}
+}
+
 func TestSceneNFOIsNotTreatedAsMetadata(t *testing.T) {
 	g := newCompleteMovieWork(t)
 	// 用压制组信息文件替换标准 NFO，模拟「元数据同步」把网盘上的 .nfo 覆盖成了非标准文件。
