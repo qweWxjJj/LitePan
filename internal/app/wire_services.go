@@ -69,6 +69,7 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 	mediaOrganizeSvc := wireMediaOrganize(st, fileSvc, logs, cfg.DataDir, aiOrganizeSvc, classifyOrganizeSvc)
 	strmScrapeSvc := strmscrape.New(strmscrape.Options{
 		Strm:     strmSvc,
+		AI:       aiOrganizeSvc,
 		Settings: st.settings,
 		Bus:      core.bus,
 		DataDir:  cfg.DataDir,

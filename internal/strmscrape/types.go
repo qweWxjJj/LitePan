@@ -93,6 +93,7 @@ type Settings struct {
 	Fanart      bool   `json:"fanart"`
 	Actors      bool   `json:"actors"`
 	ClearLogo   bool   `json:"clearlogo"`
+	AIAssist    bool   `json:"-"`
 
 	TmdbAPIKey            string `json:"tmdb_api_key"`
 	TmdbLanguage          string `json:"tmdb_language"`

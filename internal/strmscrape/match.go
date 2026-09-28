@@ -14,24 +14,26 @@ import (
 )
 
 type tmdbInfo struct {
-	TMDBID        string
-	Title         string
-	Original      string
-	Year          *int
-	Plot          string
-	PosterPath    string
-	BackdropPath  string
-	Actors        []tmdbActor
-	Directors     []string
-	Writers       []string
-	LogoPath      string
-	MediaType     string
-	Doubt         bool
-	EpisodeCount  int // 默认全剧集数；刮削时会按本地已有季收窄
-	Rating        float64
-	VoteCount     int
-	OriginalLang  string
-	CreditsLoaded bool
+	TMDBID                     string
+	Title                      string
+	Original                   string
+	Year                       *int
+	Plot                       string
+	PosterPath                 string
+	BackdropPath               string
+	Actors                     []tmdbActor
+	Directors                  []string
+	Writers                    []string
+	LogoPath                   string
+	MediaType                  string
+	Doubt                      bool
+	EpisodeCount               int // 默认全剧集数；刮削时会按本地已有季收窄
+	Rating                     float64
+	VoteCount                  int
+	OriginalLang               string
+	CreditsLoaded              bool
+	PeopleTranslationAttempted bool
+	PeopleLocalized            bool
 }
 
 type tmdbActor struct {
@@ -243,6 +245,9 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 			return 0, err
 		}
 	}
+	if cfg.Actors && cfg.AIAssist {
+		info = s.localizeTMDBPeople(ctx, info)
+	}
 	epTMDB = 0
 	if withTVExtras {
 		epTMDB = info.EpisodeCount
@@ -254,9 +259,10 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	}
 	epLocal, _ := countTVEpisodeProgress(g)
 	if err := writePendingState(g, scrapeState{
-		Status:  PendingRunning,
-		EpLocal: epLocal,
-		EpTMDB:  epTMDB,
+		Status:                   PendingRunning,
+		EpLocal:                  epLocal,
+		EpTMDB:                   epTMDB,
+		PeopleTranslationVersion: translationVersionFor(info),
 	}); err != nil {
 		return 0, err
 	}
@@ -275,10 +281,16 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		}
 	} else if cfg.Actors {
 		// 补写演职员是可选项：NFO 结构异常时只警告跳过，不能中断整部作品（否则海报/背景图/Logo 也写不成）。
-		if err := appendNFOPeople(nfo, actors, info.Directors, info.Writers); err != nil {
+		var peopleErr error
+		if info.PeopleLocalized {
+			peopleErr = replaceNFOPeople(nfo, actors, info.Directors, info.Writers)
+		} else {
+			peopleErr = appendNFOPeople(nfo, actors, info.Directors, info.Writers)
+		}
+		if peopleErr != nil {
 			peopleSkipped = true
 			if s.log != nil {
-				s.log.Warn("STRM 刮削补写演职员信息失败，已跳过", "nfo", nfo, "err", err)
+				s.log.Warn("STRM 刮削补写演职员信息失败，已跳过", "nfo", nfo, "err", peopleErr)
 			}
 		}
 	}
