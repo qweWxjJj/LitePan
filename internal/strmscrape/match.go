@@ -22,6 +22,8 @@ type tmdbInfo struct {
 	PosterPath    string
 	BackdropPath  string
 	Actors        []tmdbActor
+	Directors     []string
+	Writers       []string
 	LogoPath      string
 	MediaType     string
 	Doubt         bool
@@ -44,6 +46,16 @@ func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGrou
 	mediaType := inferMediaType(g)
 	folderName := workDisplayName(g)
 	dirParsed := rules.NormalizeParsedMedia(rules.ParseDirName(folderName))
+
+	// 对整理成功的目录，分类路径和目录 TMDB ID 是权威身份。禁止再搜索
+	// 标题或跨 movie/tv 类型回退，避免相同数字 ID 命中另一命名空间。
+	if organizedType, ok := organizedMediaType(g); ok {
+		id := rules.FindTMDBIDInName(folderName)
+		if id == "" {
+			return nil, fmt.Errorf("已整理目录缺少 TMDB ID")
+		}
+		return lookupTMDBInfoExact(ctx, client, id, organizedType, withActors)
+	}
 
 	var fileParses []rules.ParsedMedia
 	for _, e := range g.entries {
@@ -133,6 +145,18 @@ func lookupTMDBInfo(ctx context.Context, client *tmdb.Client, id, mediaType stri
 		lastErr = fmt.Errorf("TMDB 查询失败")
 	}
 	return nil, lastErr
+}
+
+func lookupTMDBInfoExact(ctx context.Context, client *tmdb.Client, id, mediaType string, withActors bool) (*tmdbInfo, error) {
+	raw, err := client.LookupWithAppend(ctx, id, mediaType, actorAppendResponse(mediaType, withActors)...)
+	if err != nil {
+		return nil, err
+	}
+	info, err := decodeTMDBInfo(raw, mediaType)
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
 
 func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year *int, mediaType string, withActors bool) (*tmdbInfo, error) {
@@ -239,22 +263,22 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	needTVExtras := withTVExtras && mediaType == MediaTypeTV && g.flatFile == "" && strings.TrimSpace(info.TMDBID) != ""
 	nfo, poster := workMetaPaths(g, mediaType)
 	actors := buildNFOActors(client, info.Actors)
-	actorSkipped := false
+	peopleSkipped := false
 	// 目标 NFO 不存在或不是标准 NFO（如压制组信息文件）都重写；后者直接覆盖。
 	if nfoWriteNeeded(overwrite, nfo) {
 		if mediaType == MediaTypeTV {
-			if err := writeWorkNFOWithRating(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount); err != nil {
+			if err := writeWorkNFOWithRating(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Directors, info.Writers, info.Rating, info.VoteCount); err != nil {
 				return 0, err
 			}
-		} else if err := writeWorkNFOWithRating(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Rating, info.VoteCount); err != nil {
+		} else if err := writeWorkNFOWithRating(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Directors, info.Writers, info.Rating, info.VoteCount); err != nil {
 			return 0, err
 		}
 	} else if cfg.Actors {
-		// 补写演员是可选项：NFO 结构异常时只警告跳过，不能中断整部作品（否则海报/背景图/Logo 也写不成）。
-		if err := appendNFOActors(nfo, actors); err != nil {
-			actorSkipped = true
+		// 补写演职员是可选项：NFO 结构异常时只警告跳过，不能中断整部作品（否则海报/背景图/Logo 也写不成）。
+		if err := appendNFOPeople(nfo, actors, info.Directors, info.Writers); err != nil {
+			peopleSkipped = true
 			if s.log != nil {
-				s.log.Warn("STRM 刮削补写演员信息失败，已跳过", "nfo", nfo, "err", err)
+				s.log.Warn("STRM 刮削补写演职员信息失败，已跳过", "nfo", nfo, "err", err)
 			}
 		}
 	}
@@ -293,7 +317,7 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		finalizeAfterScrape(g, mediaType, epTMDB, info.Doubt)
 	}
 	// 记录本次 TMDB 是否根本没有可选资源，避免下一轮再次为同一部作品发请求。
-	syncOptionalAssetState(g, cfg, info, actorSkipped)
+	syncOptionalAssetState(g, cfg, info, peopleSkipped)
 	clearManualComplete(g)
 	return epTMDB, nil
 }
@@ -325,6 +349,7 @@ func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, c
 			creditsKey = "aggregate_credits"
 		}
 		info.Actors = decodeTMDBActors(payload[creditsKey], 20)
+		info.Directors, info.Writers = decodeTMDBCrew(payload[creditsKey])
 	}
 	if cfg.ClearLogo {
 		images, imageErr := client.FetchImages(ctx, info.TMDBID, info.MediaType)
@@ -392,15 +417,15 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 	out := make([]tmdbActor, 0, limit)
 	for _, value := range cast {
 		item, _ := value.(map[string]any)
-		name := strings.TrimSpace(anyString(item["name"]))
+		name := cleanPersonText(item["name"])
 		if name == "" {
 			continue
 		}
-		role := strings.TrimSpace(anyString(item["character"]))
+		role := cleanPersonText(item["character"])
 		if role == "" {
 			if roles, _ := item["roles"].([]any); len(roles) > 0 {
 				if first, _ := roles[0].(map[string]any); first != nil {
-					role = strings.TrimSpace(anyString(first["character"]))
+					role = cleanPersonText(first["character"])
 				}
 			}
 		}
@@ -408,12 +433,72 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 		if parsed := asInt(item["order"]); parsed != nil {
 			order = *parsed
 		}
-		out = append(out, tmdbActor{Name: name, Role: role, ProfilePath: strings.TrimSpace(anyString(item["profile_path"])), Order: order})
+		out = append(out, tmdbActor{Name: name, Role: role, ProfilePath: cleanPersonText(item["profile_path"]), Order: order})
 		if len(out) == limit {
 			break
 		}
 	}
 	return out
+}
+
+func decodeTMDBCrew(raw any) (directors, writers []string) {
+	credits, _ := raw.(map[string]any)
+	crew, _ := credits["crew"].([]any)
+	directorSeen := map[string]struct{}{}
+	writerSeen := map[string]struct{}{}
+	for _, value := range crew {
+		item, _ := value.(map[string]any)
+		name := cleanPersonText(item["name"])
+		if name == "" {
+			continue
+		}
+		department := strings.ToLower(cleanPersonText(item["department"]))
+		jobs := []string{cleanPersonText(item["job"])}
+		if aggregateJobs, _ := item["jobs"].([]any); len(aggregateJobs) > 0 {
+			jobs = jobs[:0]
+			for _, rawJob := range aggregateJobs {
+				job, _ := rawJob.(map[string]any)
+				jobs = append(jobs, cleanPersonText(job["job"]))
+			}
+		}
+		isDirector := false
+		isWriter := department == "writing"
+		for _, job := range jobs {
+			switch strings.ToLower(strings.TrimSpace(job)) {
+			case "director", "series director":
+				isDirector = true
+			case "writer", "screenplay", "story", "teleplay", "adaptation", "novel":
+				isWriter = true
+			}
+		}
+		if isDirector {
+			directors = appendUniquePerson(directors, directorSeen, name)
+		}
+		if isWriter {
+			writers = appendUniquePerson(writers, writerSeen, name)
+		}
+	}
+	return directors, writers
+}
+
+func cleanPersonText(value any) string {
+	text := strings.TrimSpace(anyString(value))
+	if strings.EqualFold(text, "<nil>") || strings.EqualFold(text, "nil") || strings.EqualFold(text, "null") {
+		return ""
+	}
+	return text
+}
+
+func appendUniquePerson(values []string, seen map[string]struct{}, name string) []string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		return values
+	}
+	if _, ok := seen[key]; ok {
+		return values
+	}
+	seen[key] = struct{}{}
+	return append(values, strings.TrimSpace(name))
 }
 
 func buildNFOActors(client *tmdb.Client, actors []tmdbActor) []nfoActor {
@@ -595,7 +680,7 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 		creditsKey = "aggregate_credits"
 	}
 	_, creditsLoaded := m[creditsKey]
-	return tmdbInfo{
+	info := tmdbInfo{
 		TMDBID:        id,
 		Title:         title,
 		Original:      original,
@@ -609,8 +694,12 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 		VoteCount:     intValue(m["vote_count"]),
 		OriginalLang:  strings.TrimSpace(anyString(m["original_language"])),
 		Actors:        decodeTMDBActors(m[creditsKey], 20),
+		Directors:     nil,
+		Writers:       nil,
 		CreditsLoaded: creditsLoaded,
-	}, nil
+	}
+	info.Directors, info.Writers = decodeTMDBCrew(m[creditsKey])
+	return info, nil
 }
 
 func anyFloat64(v any) float64 {

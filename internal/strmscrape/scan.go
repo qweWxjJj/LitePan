@@ -98,6 +98,12 @@ func resolveWorkDir(libraryRoot, strmAbs string) string {
 		if sameFilePath(dir, libraryRoot) {
 			return libraryRoot
 		}
+		// 整理成功的作品目录以 TMDB ID 作为强边界。即使电影标题包含
+		// “第一部/第二部”等容易被旧季号规则误判的文本，也不能继续向上
+		// 提升到“电影”分类目录并把全部影片合并成一部剧。
+		if rules.FindTMDBIDInName(filepath.Base(dir)) != "" {
+			return dir
+		}
 		if isStructuralWorkSubdir(dir) {
 			parent := filepath.Dir(dir)
 			if parent == dir || (!isInside(libraryRoot, parent) && !sameFilePath(parent, libraryRoot)) {
@@ -111,6 +117,11 @@ func resolveWorkDir(libraryRoot, strmAbs string) string {
 }
 
 func inferMediaType(g workGroup) string {
+	// 已整理目录由分类路径决定类型，标题和文件名只负责季集解析，不能反向
+	// 覆盖分类结果。TMDB 的 movie/tv ID 分属不同命名空间，必须与类型配对。
+	if mediaType, ok := organizedMediaType(g); ok {
+		return mediaType
+	}
 	// 目录结构优先：存在 Season / 特别篇子目录，或文件位于此类目录下 → 剧集
 	if g.flatFile == "" {
 		if entries, err := os.ReadDir(g.absDir); err == nil {
@@ -154,6 +165,27 @@ func inferMediaType(g workGroup) string {
 		return MediaTypeTV
 	}
 	return MediaTypeMovie
+}
+
+// organizedMediaType 识别目录整理后的常见分类路径。只有作品目录本身带 TMDB
+// 标记时才启用强类型，未整理的旧目录继续使用原有启发式兼容逻辑。
+func organizedMediaType(g workGroup) (string, bool) {
+	if g.flatFile != "" || rules.FindTMDBIDInName(workDisplayName(g)) == "" {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(g.relKey), "/")
+	if len(parts) < 2 {
+		return "", false
+	}
+	for i := len(parts) - 2; i >= 0; i-- {
+		switch strings.ToLower(strings.TrimSpace(parts[i])) {
+		case "电影", "影片", "movie", "movies", "film", "films":
+			return MediaTypeMovie, true
+		case "剧集", "电视剧", "电视节目", "动漫", "动画", "tv", "shows", "series", "anime":
+			return MediaTypeTV, true
+		}
+	}
+	return "", false
 }
 
 func isLikelyMovieWorkFolder(name string) bool {

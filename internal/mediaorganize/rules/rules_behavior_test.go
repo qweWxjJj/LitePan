@@ -230,6 +230,8 @@ func TestParseSeasonDirNumberWithPrefixedNoise(t *testing.T) {
 		"Hanzawa.Naoki.S01E01",
 		"Movie Season 2024",
 		"第1季第2集",
+		"女性瘾者：第一部 (2013) {tmdb-258216}",
+		"女性瘾者：第二部 (2013) {tmdb-249397}",
 	} {
 		t.Run("reject/"+input, func(t *testing.T) {
 			if got := ParseSeasonDirNumber(input); got != nil {

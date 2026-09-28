@@ -163,6 +163,78 @@ func TestSpecialPrefixedMovieStaysInOwnDirectory(t *testing.T) {
 	}
 }
 
+func TestOrganizedNumberedMoviePartsStaySeparate(t *testing.T) {
+	root := t.TempDir()
+	movies := []string{
+		"女性瘾者：第一部 (2013) {tmdb-258216}",
+		"女性瘾者：第二部 (2013) {tmdb-249397}",
+	}
+	for _, name := range movies {
+		dir := filepath.Join(root, "电影", name)
+		mustMkdir(t, dir)
+		mustWrite(t, filepath.Join(dir, name+".strm"), "x")
+	}
+
+	works, err := scanWorks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 2 {
+		t.Fatalf("want 2 independent movies, got %d: %+v", len(works), works)
+	}
+	for _, work := range works {
+		if filepath.Base(work.absDir) != workDisplayName(work) {
+			t.Fatalf("work was promoted above movie directory: %+v", work)
+		}
+		if got := inferMediaType(work); got != MediaTypeMovie {
+			t.Fatalf("%s: media type=%q, want movie", work.relKey, got)
+		}
+		if len(work.entries) != 1 {
+			t.Fatalf("%s: entries=%d, want 1", work.relKey, len(work.entries))
+		}
+	}
+}
+
+func TestOrganizedMovieCategoryOverridesStaleTVNFO(t *testing.T) {
+	root := t.TempDir()
+	movie := filepath.Join(root, "电影", "女性瘾者：第一部 (2013) {tmdb-258216}")
+	mustMkdir(t, movie)
+	mustWrite(t, filepath.Join(movie, "女性瘾者：第一部.strm"), "x")
+	mustWrite(t, filepath.Join(movie, "tvshow.nfo"), "<tvshow><title>旧的错误元数据</title></tvshow>")
+
+	works, err := scanWorks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 {
+		t.Fatalf("works=%d", len(works))
+	}
+	if got := resolveWorkMediaType(works[0]); got != MediaTypeMovie {
+		t.Fatalf("media type=%q, want organized movie", got)
+	}
+}
+
+func TestOrganizedMultiSeasonTVUsesCategoryAndSingleWorkRoot(t *testing.T) {
+	root := t.TempDir()
+	show := filepath.Join(root, "剧集", "测试剧 (2024) {tmdb-12345}")
+	for _, season := range []string{"Season 01", "Season 02"} {
+		dir := filepath.Join(show, season)
+		mustMkdir(t, dir)
+		mustWrite(t, filepath.Join(dir, "测试剧."+strings.ReplaceAll(season, "Season ", "S")+"E01.strm"), "x")
+	}
+
+	works, err := scanWorks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || works[0].absDir != show || len(works[0].entries) != 2 {
+		t.Fatalf("multi-season TV grouping=%+v", works)
+	}
+	if got := inferMediaType(works[0]); got != MediaTypeTV {
+		t.Fatalf("media type=%q, want tv", got)
+	}
+}
+
 func TestPureSpecialsDirectoryStillCollapsesIntoTVShow(t *testing.T) {
 	root := t.TempDir()
 	show := filepath.Join(root, "剧集", "测试剧 (2023)")
@@ -243,7 +315,7 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		t.Fatalf("season nfo unexpected: %s", text)
 	}
 	epNFO := filepath.Join(root, "Show.S01E01.nfo")
-	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120); err != nil {
+	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120, []string{"杨磊"}, []string{"田良良"}); err != nil {
 		t.Fatal(err)
 	}
 	body, err = os.ReadFile(epNFO)
@@ -261,6 +333,8 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		`<rating name="themoviedb" max="10" default="true">`,
 		`<value>8.6</value>`,
 		`<votes>120</votes>`,
+		`<director>杨磊</director>`,
+		`<credits>田良良</credits>`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("episode nfo missing %q: %s", expected, text)

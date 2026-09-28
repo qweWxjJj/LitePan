@@ -22,7 +22,7 @@ var (
 	releaseGroupGenericRe = regexp.MustCompile(`(?i)^(.+?)[\-_.]([\w\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]{1,12})\s*$`)
 	seTokenRe             = regexp.MustCompile(`(?i)^S\d+E\d+$`)
 
-	cnSeasonSuffixRe = regexp.MustCompile(`(?i)^(?P<title>.+?)[\s._\-]*第\s*(?P<num>[0-9]+|[零〇一二两三四五六七八九十百]+)\s*[季部]\s*$`)
+	cnSeasonSuffixRe = regexp.MustCompile(`(?i)^(?P<title>.+?)[\s._\-]*第\s*(?P<num>[0-9]+|[零〇一二两三四五六七八九十百]+)\s*季\s*$`)
 	enSeasonSuffixRe = regexp.MustCompile(`(?i)^(?P<title>.+?)[\s._\-]+(?:Season|Series)\s*0*(?P<num>\d{1,3})\s*$`)
 	trailingNumberRe = regexp.MustCompile(`(?P<title>.+?)[\s._\-]*(?P<num>\d{1,2})\s*$`)
 
@@ -72,14 +72,14 @@ var (
 	}{
 		{regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:season|series)\s*0*(\d{1,3})\b`), func(m []string) *int { n, _ := parseInt(m[1]); return intPtr(n) }},
 		{regexp.MustCompile(`(?i)(?:^|[^a-z0-9])s0*(\d{1,3})\b`), func(m []string) *int { n, _ := parseInt(m[1]); return intPtr(n) }},
-		{regexp.MustCompile(`(?:^|[^0-9])第\s*(\d{1,3})\s*[季部](?:$|[\s._\-()（）【】\[\]])`), func(m []string) *int { n, _ := parseInt(m[1]); return intPtr(n) }},
-		{regexp.MustCompile(`(?:^|[^零〇一二两三四五六七八九十百])第([零〇一二两三四五六七八九十百]+)\s*[季部](?:$|[\s._\-()（）【】\[\]])`), func(m []string) *int { return ChineseNumberToInt(m[1]) }},
+		{regexp.MustCompile(`(?:^|[^0-9])第\s*(\d{1,3})\s*季(?:$|[\s._\-()（）【】\[\]])`), func(m []string) *int { n, _ := parseInt(m[1]); return intPtr(n) }},
+		{regexp.MustCompile(`(?:^|[^零〇一二两三四五六七八九十百])第([零〇一二两三四五六七八九十百]+)\s*季(?:$|[\s._\-()（）【】\[\]])`), func(m []string) *int { return ChineseNumberToInt(m[1]) }},
 	}
 
 	numberPattern         = `(\d{1,4}|[零〇一二两三四五六七八九十百]{1,6})`
 	seasonEpisodePatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*[季部])\s*第\s*` + numberPattern + `\s*[集话話回]`),
-		regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*[季部])\s*[Ee][Pp]?\s*` + numberPattern),
+		regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*季)\s*第\s*` + numberPattern + `\s*[集话話回]`),
+		regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*季)\s*[Ee][Pp]?\s*` + numberPattern),
 		regexp.MustCompile(`(?i)(?:Season|Series)\s*` + numberPattern + `\s*(?:Episode|Ep|E)\s*` + numberPattern),
 		regexp.MustCompile(`(?i)[Ss]\s*` + numberPattern + `\s*[Ee]\s*` + numberPattern),
 		regexp.MustCompile(`(?i)` + numberPattern + `\s*[xX]\s*` + numberPattern),
@@ -89,5 +89,5 @@ var (
 		regexp.MustCompile(`(?i)(?:^|[\s._\-\[])(?:EP|Ep|ep|Episode|episode|E)\s*` + numberPattern + `(?:$|[\s._\-\]])`),
 		regexp.MustCompile(`(?i)(?:^|[\s._\-\[])` + numberPattern + `\s*(?:集|话|話|回|期)(?:$|[\s._\-\]:：])`),
 	}
-	fullEpisodeRe = regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*[季部]\s*)?(?:第\s*` + numberPattern + `\s*[集话話回期]|EP\s*` + numberPattern + `|E\s*` + numberPattern + `)`)
+	fullEpisodeRe = regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*季\s*)?(?:第\s*` + numberPattern + `\s*[集话話回期]|EP\s*` + numberPattern + `|E\s*` + numberPattern + `)`)
 )

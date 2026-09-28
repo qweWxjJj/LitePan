@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// seasonOnlyRe 匹配“第 N 季/部”这类纯季标题尾部，用于回退标题前缀。
-var seasonOnlyRe = regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*[季部])\s*$`)
+// seasonOnlyRe 匹配“第 N 季”这类纯季标题尾部，用于回退标题前缀。
+// “第 N 部”通常是电影续作标题，不作为剧集季号处理。
+var seasonOnlyRe = regexp.MustCompile(`(?i)(?:第\s*` + numberPattern + `\s*季)\s*$`)
 
 func NormalizeParsedMedia(parsed ParsedMedia) ParsedMedia {
 	result := clearUnreasonableSeason(parsed)

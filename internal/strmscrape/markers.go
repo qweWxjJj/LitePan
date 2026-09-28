@@ -33,13 +33,15 @@ type scrapeState struct {
 	EpLocal int    `json:"ep_local,omitempty"`
 	EpTMDB  int    `json:"ep_tmdb,omitempty"`
 	// 只记“TMDB 没有”不记“下载失败”，后者下轮要继续重试；手动刮削会重新请求并按最新结果覆写。
-	NoBackdrop bool `json:"no_backdrop,omitempty"`
-	NoLogo     bool `json:"no_logo,omitempty"`
-	NoActors   bool `json:"no_actors,omitempty"`
+	NoBackdrop  bool `json:"no_backdrop,omitempty"`
+	NoLogo      bool `json:"no_logo,omitempty"`
+	NoActors    bool `json:"no_actors,omitempty"`
+	NoDirectors bool `json:"no_directors,omitempty"`
+	NoWriters   bool `json:"no_writers,omitempty"`
 }
 
 func (s scrapeState) hasOptionalGap() bool {
-	return s.NoBackdrop || s.NoLogo || s.NoActors
+	return s.NoBackdrop || s.NoLogo || s.NoActors || s.NoDirectors || s.NoWriters
 }
 
 // terminal 表示不再是待刮削状态：done=已完结（带可选资源结论）、ended=用户设为完结。
@@ -65,8 +67,8 @@ func pendingMarkerPath(g workGroup) string {
 }
 
 // syncOptionalAssetState 按本次 TMDB 结果更新可选资源结论，与 pending 共用同一文件：真实 pending 不动，
-// 终态按最新结果覆写；只在开关打开时记录，actorSkipped 表示 NFO 异常未补写演员也要记下结论。
-func syncOptionalAssetState(g workGroup, cfg Settings, info tmdbInfo, actorSkipped bool) {
+// 终态按最新结果覆写；只在开关打开时记录，peopleSkipped 表示 NFO 异常未补写演职员也要记下结论。
+func syncOptionalAssetState(g workGroup, cfg Settings, info tmdbInfo, peopleSkipped bool) {
 	st, ok := readPendingState(g)
 	if ok && !isTerminalState(st.Status) {
 		return
@@ -74,7 +76,9 @@ func syncOptionalAssetState(g workGroup, cfg Settings, info tmdbInfo, actorSkipp
 	st.Status = PendingDone
 	st.NoBackdrop = cfg.Fanart && strings.TrimSpace(info.BackdropPath) == ""
 	st.NoLogo = cfg.ClearLogo && strings.TrimSpace(info.LogoPath) == ""
-	st.NoActors = cfg.Actors && (len(info.Actors) == 0 || actorSkipped)
+	st.NoActors = cfg.Actors && (len(info.Actors) == 0 || peopleSkipped)
+	st.NoDirectors = cfg.Actors && (len(info.Directors) == 0 || peopleSkipped)
+	st.NoWriters = cfg.Actors && (len(info.Writers) == 0 || peopleSkipped)
 	if st.hasOptionalGap() {
 		_ = writePendingState(g, st)
 		return

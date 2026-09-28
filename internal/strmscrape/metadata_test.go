@@ -55,10 +55,12 @@ func allOptionalEnabled() Settings {
 func writeDoneState(t *testing.T, g workGroup) {
 	t.Helper()
 	err := writePendingState(g, scrapeState{
-		Status:     PendingDone,
-		NoBackdrop: true,
-		NoLogo:     true,
-		NoActors:   true,
+		Status:      PendingDone,
+		NoBackdrop:  true,
+		NoLogo:      true,
+		NoActors:    true,
+		NoDirectors: true,
+		NoWriters:   true,
 	})
 	if err != nil {
 		t.Fatalf("写状态失败: %v", err)
@@ -159,7 +161,7 @@ func TestSyncOptionalAssetState(t *testing.T) {
 		if !ok || st.Status != PendingDone {
 			t.Fatalf("应写入 done 状态，实际 %+v ok=%v", st, ok)
 		}
-		if !st.NoBackdrop || !st.NoLogo || !st.NoActors {
+		if !st.NoBackdrop || !st.NoLogo || !st.NoActors || !st.NoDirectors || !st.NoWriters {
 			t.Fatalf("应记录三项缺失，实际 %+v", st)
 		}
 	})
@@ -167,7 +169,7 @@ func TestSyncOptionalAssetState(t *testing.T) {
 	t.Run("TMDB 有资源时删除文件", func(t *testing.T) {
 		g := newCompleteMovieWork(t)
 		writeDoneState(t, g)
-		info := tmdbInfo{TMDBID: "76600", BackdropPath: "/b.jpg", LogoPath: "/l.png"}
+		info := tmdbInfo{TMDBID: "76600", BackdropPath: "/b.jpg", LogoPath: "/l.png", Directors: []string{"James Cameron"}, Writers: []string{"James Cameron"}}
 		info.Actors = []tmdbActor{{Name: "Sam Worthington"}}
 		syncOptionalAssetState(g, allOptionalEnabled(), info, false)
 		if _, ok := readPendingState(g); ok {
@@ -342,7 +344,7 @@ func TestMovieNFOWritesTMDBRating(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "movie.nfo")
-	if err := writeWorkNFOWithRating(path, "movie", info.Title, info.TMDBID, info.Plot, info.Year, nil, info.Rating, info.VoteCount); err != nil {
+	if err := writeWorkNFOWithRating(path, "movie", info.Title, info.TMDBID, info.Plot, info.Year, nil, nil, nil, info.Rating, info.VoteCount); err != nil {
 		t.Fatalf("写 NFO 失败: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -384,7 +386,7 @@ func TestDecodeTMDBActorsHandlesAggregateCreditsNullFields(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "tvshow.nfo")
-	if err := writeWorkNFOWithRating(path, "tvshow", "测试剧集", "1", "", nil, buildNFOActors(nil, actors), 0, 0); err != nil {
+	if err := writeWorkNFOWithRating(path, "tvshow", "测试剧集", "1", "", nil, buildNFOActors(nil, actors), nil, nil, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -399,6 +401,81 @@ func TestDecodeTMDBActorsHandlesAggregateCreditsNullFields(t *testing.T) {
 	}
 	if strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") || strings.Contains(text, "<thumb>") {
 		t.Fatalf("NFO 不应写入 null 字段:\n%s", text)
+	}
+}
+
+func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
+	var credits any
+	if err := json.Unmarshal([]byte(`{
+		"crew": [
+			{"name":"导演甲","job":"Director","department":"Directing"},
+			{"name":"导演甲","job":"Director","department":"Directing"},
+			{"name":"编剧甲","job":"Screenplay","department":"Writing"},
+			{"name":"编剧乙","jobs":[{"job":"Writer"},{"job":"Story"}],"department":"Writing"},
+			{"name":null,"job":"Director"},
+			{"name":"<nil>","job":"Writer"}
+		]
+	}`), &credits); err != nil {
+		t.Fatal(err)
+	}
+
+	directors, writers := decodeTMDBCrew(credits)
+	if strings.Join(directors, ",") != "导演甲" || strings.Join(writers, ",") != "编剧甲,编剧乙" {
+		t.Fatalf("crew decode directors=%v writers=%v", directors, writers)
+	}
+
+	path := filepath.Join(t.TempDir(), "movie.nfo")
+	if err := writeWorkNFOWithRating(path, "movie", "测试电影", "1", "", nil, nil, directors, writers, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{
+		"<director>导演甲</director>",
+		"<credits>编剧甲</credits>",
+		"<credits>编剧乙</credits>",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("Emby NFO missing %q:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "<writer>") || strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") {
+		t.Fatalf("Emby NFO contains incompatible/null people tags:\n%s", text)
+	}
+}
+
+func TestAppendNFOPeoplePreservesCustomFieldsAndOnlyFillsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "movie.nfo")
+	if err := os.WriteFile(path, []byte("<?xml version=\"1.0\"?><movie><title>自定义</title><custom>保留</custom><actor><name>已有演员</name></actor><director>已有导演</director></movie>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendNFOPeople(path,
+		[]nfoActor{{Name: "新演员"}},
+		[]string{"新导演"},
+		[]string{"新编剧", "新编剧", "<nil>"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{"<custom>保留</custom>", "<name>已有演员</name>", "<director>已有导演</director>", "<credits>新编剧</credits>"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("augmented NFO missing %q:\n%s", expected, text)
+		}
+	}
+	for _, unexpected := range []string{"<name>新演员</name>", "<director>新导演</director>", "&lt;nil&gt;", "<nil>"} {
+		if strings.Contains(text, unexpected) {
+			t.Fatalf("augmented NFO unexpectedly contains %q:\n%s", unexpected, text)
+		}
+	}
+	if strings.Count(text, "<credits>新编剧</credits>") != 1 {
+		t.Fatalf("writer should be deduplicated:\n%s", text)
 	}
 }
 

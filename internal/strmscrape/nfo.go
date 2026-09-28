@@ -18,6 +18,9 @@ type workNFO struct {
 	Plot    string      `xml:"plot,omitempty"`
 	Ratings *nfoRatings `xml:"ratings,omitempty"`
 	Actors  []nfoActor  `xml:"actor,omitempty"`
+	// Emby 使用 director 表示导演，使用 credits 表示编剧；两者均为可重复元素。
+	Directors []string `xml:"director,omitempty"`
+	Credits   []string `xml:"credits,omitempty"`
 }
 
 type nfoRatings struct {
@@ -58,9 +61,16 @@ type episodeNFO struct {
 	TMDBID    string      `xml:"tmdbid,omitempty"`
 	ShowTitle string      `xml:"showtitle,omitempty"`
 	Ratings   *nfoRatings `xml:"ratings,omitempty"`
+	Directors []string    `xml:"director,omitempty"`
+	Credits   []string    `xml:"credits,omitempty"`
 }
 
-var nfoRootCloseRe = regexp.MustCompile(`(?i)</(?:movie|tvshow)\s*>`)
+type nfoPersonText struct {
+	XMLName xml.Name
+	Value   string `xml:",chardata"`
+}
+
+var nfoRootCloseRe = regexp.MustCompile(`(?i)</(?:movie|tvshow|episodedetails)\s*>`)
 
 // nfoLooksStandard 文件含 movie/tvshow 根节点才算可用 NFO，压制组的 MediaInfo 文本不算。
 func nfoLooksStandard(path string) bool {
@@ -115,6 +125,24 @@ func workHasNFO(g workGroup, mediaType string) bool {
 func workHasActors(g workGroup, mediaType string) bool {
 	for _, path := range workNFOCandidates(g, mediaType) {
 		if nfoLooksStandard(path) && nfoHasActors(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func workHasDirectors(g workGroup, mediaType string) bool {
+	for _, path := range workNFOCandidates(g, mediaType) {
+		if nfoLooksStandard(path) && nfoHasDirectors(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func workHasWriters(g workGroup, mediaType string) bool {
+	for _, path := range workNFOCandidates(g, mediaType) {
+		if nfoLooksStandard(path) && nfoHasWriters(path) {
 			return true
 		}
 	}
@@ -243,16 +271,18 @@ func writeTVShowNFO(path, title, tmdbID, plot string, year *int, actors ...nfoAc
 }
 
 func writeWorkNFO(path, root, title, tmdbID, plot string, year *int, actors []nfoActor) error {
-	return writeWorkNFOWithRating(path, root, title, tmdbID, plot, year, actors, 0, 0)
+	return writeWorkNFOWithRating(path, root, title, tmdbID, plot, year, actors, nil, nil, 0, 0)
 }
 
-func writeWorkNFOWithRating(path, root, title, tmdbID, plot string, year *int, actors []nfoActor, rating float64, votes int) error {
+func writeWorkNFOWithRating(path, root, title, tmdbID, plot string, year *int, actors []nfoActor, directors, writers []string, rating float64, votes int) error {
 	nfo := workNFO{
-		XMLName: xml.Name{Local: root},
-		Title:   strings.TrimSpace(title),
-		TMDBID:  strings.TrimSpace(tmdbID),
-		Plot:    strings.TrimSpace(plot),
-		Actors:  actors,
+		XMLName:   xml.Name{Local: root},
+		Title:     strings.TrimSpace(title),
+		TMDBID:    strings.TrimSpace(tmdbID),
+		Plot:      strings.TrimSpace(plot),
+		Actors:    actors,
+		Directors: cleanPersonNames(directors),
+		Credits:   cleanPersonNames(writers),
 	}
 	if rating > 0 {
 		nfo.Ratings = &nfoRatings{Rating: nfoRating{
@@ -270,15 +300,28 @@ func writeWorkNFOWithRating(path, root, title, tmdbID, plot string, year *int, a
 }
 
 func nfoHasActors(path string) bool {
+	return nfoHasElement(path, "actor")
+}
+
+func nfoHasDirectors(path string) bool { return nfoHasElement(path, "director") }
+func nfoHasWriters(path string) bool   { return nfoHasElement(path, "credits") }
+
+func nfoHasElement(path, name string) bool {
 	data, err := os.ReadFile(path)
-	return err == nil && strings.Contains(strings.ToLower(string(data)), "<actor>")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(data)), "<"+strings.ToLower(name)+">")
 }
 
 // appendNFOActors 在仅补缺模式下保留已有 NFO 的全部内容，只补入演员节点。
 func appendNFOActors(path string, actors []nfoActor) error {
-	if len(actors) == 0 || nfoHasActors(path) {
-		return nil
-	}
+	return appendNFOPeople(path, actors, nil, nil)
+}
+
+// appendNFOPeople 在仅补缺模式下保留已有 NFO 的全部内容，只补入当前缺失的
+// 演员、导演和编剧节点。Emby 的编剧标签为 credits，不写 writer 以免重复入库。
+func appendNFOPeople(path string, actors []nfoActor, directors, writers []string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -289,19 +332,64 @@ func appendNFOActors(path string, actors []nfoActor) error {
 	}
 	idx := matches[len(matches)-1][0]
 	var fragments strings.Builder
-	for _, actor := range actors {
-		raw, err := xml.Marshal(actor)
-		if err != nil {
+	if !nfoHasActors(path) {
+		for _, actor := range actors {
+			raw, err := xml.Marshal(actor)
+			if err != nil {
+				return err
+			}
+			fragments.WriteString("  ")
+			fragments.Write(raw)
+			fragments.WriteByte('\n')
+		}
+	}
+	appendTextNodes := func(element string, values []string) error {
+		for _, value := range cleanPersonNames(values) {
+			raw, marshalErr := xml.Marshal(nfoPersonText{XMLName: xml.Name{Local: element}, Value: value})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			fragments.WriteString("  ")
+			fragments.Write(raw)
+			fragments.WriteByte('\n')
+		}
+		return nil
+	}
+	if !nfoHasDirectors(path) {
+		if err := appendTextNodes("director", directors); err != nil {
 			return err
 		}
-		fragments.WriteString("  ")
-		fragments.Write(raw)
-		fragments.WriteByte('\n')
+	}
+	if !nfoHasWriters(path) {
+		if err := appendTextNodes("credits", writers); err != nil {
+			return err
+		}
+	}
+	if fragments.Len() == 0 {
+		return nil
 	}
 	updated := append([]byte{}, data[:idx]...)
 	updated = append(updated, []byte(fragments.String())...)
 	updated = append(updated, data[idx:]...)
 	return os.WriteFile(path, updated, 0o644)
+}
+
+func cleanPersonNames(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		name := strings.TrimSpace(raw)
+		if name == "" || strings.EqualFold(name, "<nil>") || strings.EqualFold(name, "nil") || strings.EqualFold(name, "null") {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func writeSeasonNFO(path string, season int, title, plot, premiered string) error {
@@ -314,7 +402,7 @@ func writeSeasonNFO(path string, season int, title, plot, premiered string) erro
 	return writeXML(path, nfo)
 }
 
-func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season, episode int, rating float64, votes int) error {
+func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season, episode int, rating float64, votes int, directors, writers []string) error {
 	nfo := episodeNFO{
 		Title:     strings.TrimSpace(title),
 		Season:    fmt.Sprintf("%d", season),
@@ -323,6 +411,8 @@ func writeEpisodeNFO(path, title, showTitle, plot, aired, tmdbID string, season,
 		Aired:     strings.TrimSpace(aired),
 		TMDBID:    strings.TrimSpace(tmdbID),
 		ShowTitle: strings.TrimSpace(showTitle),
+		Directors: cleanPersonNames(directors),
+		Credits:   cleanPersonNames(writers),
 	}
 	if rating > 0 {
 		nfo.Ratings = &nfoRatings{Rating: nfoRating{

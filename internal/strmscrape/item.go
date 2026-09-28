@@ -180,6 +180,9 @@ func resolveWorkMediaTypeWithManual(g workGroup, manual manualCompleteState, ok 
 			return mediaType
 		}
 	}
+	if mediaType, organized := organizedMediaType(g); organized {
+		return mediaType
+	}
 	if g.flatFile == "" && fileExists(filepath.Join(g.absDir, "tvshow.nfo")) {
 		return MediaTypeTV
 	}
@@ -217,7 +220,16 @@ func workNeedsScrapeFromInspection(g workGroup, cfg Settings, inspected workInsp
 	if cfg.ClearLogo && !workHasClearLogo(g) && !st.NoLogo {
 		return true
 	}
-	return cfg.Actors && !workHasActors(g, mediaType) && !st.NoActors
+	if !cfg.Actors {
+		return false
+	}
+	if !workHasActors(g, mediaType) && !st.NoActors {
+		return true
+	}
+	if !workHasDirectors(g, mediaType) && !st.NoDirectors {
+		return true
+	}
+	return !workHasWriters(g, mediaType) && !st.NoWriters
 }
 
 func countTVEpisodeProgress(g workGroup) (total, scraped int) {

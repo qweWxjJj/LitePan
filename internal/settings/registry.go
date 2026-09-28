@@ -219,7 +219,7 @@ func defaultSpecs() []Spec {
 		stringSpec(KeyStrmScrapeWriteMode, "strm", "STRM 刮削写入策略", "missing_only=仅补缺；overwrite=覆盖已有 nfo/海报。", "missing_only"),
 		boolSpec(KeyStrmScrapeEpisodeInfo, "strm", "刮削分集信息", "生成季/集 NFO、季海报和分集预览图。", "true"),
 		boolSpec(KeyStrmScrapeFanart, "strm", "刮削详情页背景图", "为电影和剧集生成 fanart.jpg。", "false"),
-		boolSpec(KeyStrmScrapeActors, "strm", "刮削演员信息", "将主要演员、角色和头像地址写入作品 NFO。", "false"),
+		boolSpec(KeyStrmScrapeActors, "strm", "刮削演职员信息", "将主要演员、导演和编剧写入 Emby 兼容 NFO。", "false"),
 		boolSpec(KeyStrmScrapeClearLogo, "strm", "刮削影片 Logo", "按搜索语言优先生成 clearlogo.png。", "false"),
 		{Key: KeyStrmScrapeScopes, Type: TypeString, Default: "{}", Hidden: true},
 		// 界面偏好：信息条开合（后台不展示，仅持久化 + 随备份还原）

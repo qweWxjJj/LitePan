@@ -32,6 +32,8 @@ type tmdbEpisodeDetail struct {
 	ID            int
 	Rating        float64
 	VoteCount     int
+	Directors     []string
+	Writers       []string
 }
 
 type tmdbImageDownloader interface {
@@ -174,8 +176,12 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 				if title == "" {
 					title = fmt.Sprintf("第 %d 集", ep.EpisodeNumber)
 				}
-				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount); err != nil {
+				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount, ep.Directors, ep.Writers); err != nil {
 					return fmt.Errorf("写入 S%02dE%02d NFO：%w", season, ep.EpisodeNumber, err)
+				}
+			} else if s.GetSettings().Actors {
+				if err := appendNFOPeople(epNFO, nil, ep.Directors, ep.Writers); err != nil && s.log != nil {
+					s.log.Warn("STRM 刮削补写单集导演/编剧失败，已跳过", "nfo", epNFO, "err", err)
 				}
 			}
 			thumb := stem + "-thumb.jpg"
@@ -263,6 +269,7 @@ func fetchSeasonDetail(ctx context.Context, client *tmdb.Client, tmdbID string, 
 			Rating:        anyFloat64(em["vote_average"]),
 			VoteCount:     intValue(em["vote_count"]),
 		}
+		ep.Directors, ep.Writers = decodeTMDBCrew(map[string]any{"crew": em["crew"]})
 		if id := asInt(em["id"]); id != nil {
 			ep.ID = *id
 		}

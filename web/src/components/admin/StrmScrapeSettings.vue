@@ -162,7 +162,7 @@ defineExpose(
             <div class="scrape-extra-options">
               <label><input v-model="settings.episode_info" type="checkbox" />分集信息</label>
               <label><input v-model="settings.fanart" type="checkbox" />详情页背景图</label>
-              <label><input v-model="settings.actors" type="checkbox" />演员信息</label>
+              <label><input v-model="settings.actors" type="checkbox" />演职员信息（演员、导演、编剧）</label>
               <label><input v-model="settings.clearlogo" type="checkbox" />影片 Logo</label>
             </div>
           </template>
