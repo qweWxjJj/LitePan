@@ -71,9 +71,6 @@ type nfoPersonText struct {
 }
 
 var nfoRootCloseRe = regexp.MustCompile(`(?i)</(?:movie|tvshow|episodedetails)\s*>`)
-var nfoActorNodeRe = regexp.MustCompile(`(?is)<actor(?:\s[^>]*)?>.*?</actor\s*>\s*`)
-var nfoDirectorNodeRe = regexp.MustCompile(`(?is)<director(?:\s[^>]*)?>.*?</director\s*>\s*`)
-var nfoCreditsNodeRe = regexp.MustCompile(`(?is)<credits(?:\s[^>]*)?>.*?</credits\s*>\s*`)
 
 // nfoLooksStandard 文件含 movie/tvshow 根节点才算可用 NFO，压制组的 MediaInfo 文本不算。
 func nfoLooksStandard(path string) bool {
@@ -373,64 +370,6 @@ func appendNFOPeople(path string, actors []nfoActor, directors, writers []string
 	}
 	updated := append([]byte{}, data[:idx]...)
 	updated = append(updated, []byte(fragments.String())...)
-	updated = append(updated, data[idx:]...)
-	return os.WriteFile(path, updated, 0o644)
-}
-
-// replaceNFOPeople 用于 AI 中文化后的升级写入：只替换有新数据的演职员节点，
-// 保留标题、简介、自定义标签等其余 NFO 内容。
-func replaceNFOPeople(path string, actors []nfoActor, directors, writers []string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if len(nfoRootCloseRe.FindAllIndex(data, -1)) == 0 {
-		return fmt.Errorf("NFO 缺少 movie/tvshow 根节点")
-	}
-	if len(actors) > 0 {
-		data = nfoActorNodeRe.ReplaceAll(data, nil)
-	}
-	if len(cleanPersonNames(directors)) > 0 {
-		data = nfoDirectorNodeRe.ReplaceAll(data, nil)
-	}
-	if len(cleanPersonNames(writers)) > 0 {
-		data = nfoCreditsNodeRe.ReplaceAll(data, nil)
-	}
-	matches := nfoRootCloseRe.FindAllIndex(data, -1)
-	idx := matches[len(matches)-1][0]
-	var fragments strings.Builder
-	for _, actor := range actors {
-		if cleanPersonValue(actor.Name) == "" {
-			continue
-		}
-		raw, marshalErr := xml.Marshal(actor)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		fragments.WriteString("  ")
-		fragments.Write(raw)
-		fragments.WriteByte('\n')
-	}
-	appendTextNodes := func(element string, values []string) error {
-		for _, value := range cleanPersonNames(values) {
-			raw, marshalErr := xml.Marshal(nfoPersonText{XMLName: xml.Name{Local: element}, Value: value})
-			if marshalErr != nil {
-				return marshalErr
-			}
-			fragments.WriteString("  ")
-			fragments.Write(raw)
-			fragments.WriteByte('\n')
-		}
-		return nil
-	}
-	if err := appendTextNodes("director", directors); err != nil {
-		return err
-	}
-	if err := appendTextNodes("credits", writers); err != nil {
-		return err
-	}
-	updated := append([]byte{}, data[:idx]...)
-	updated = append(updated, fragments.String()...)
 	updated = append(updated, data[idx:]...)
 	return os.WriteFile(path, updated, 0o644)
 }

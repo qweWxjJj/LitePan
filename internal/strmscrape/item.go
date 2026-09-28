@@ -220,9 +220,6 @@ func workNeedsScrapeFromInspection(g workGroup, cfg Settings, inspected workInsp
 	if cfg.ClearLogo && !workHasClearLogo(g) && !st.NoLogo {
 		return true
 	}
-	if cfg.Actors && cfg.AIAssist && st.PeopleTranslationVersion != peopleTranslationVersion {
-		return true
-	}
 	if !cfg.Actors {
 		return false
 	}

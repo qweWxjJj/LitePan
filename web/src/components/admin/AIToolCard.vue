@@ -255,7 +255,7 @@ function configCompleteFromInstances(items: AIOrganizeInstanceUpdate[]) {
     <ToolCard
       :enabled="aiConfig.enabled"
       name="AI 辅助识别"
-      driver="目录整理补判 · NFO 演职员中文化"
+      driver="目录整理 · 低置信作品补判"
       logo-src="/logos/AI.png"
       logo-alt="AI"
       :stat-value="activeModel || '待配置'"
@@ -283,7 +283,7 @@ function configCompleteFromInstances(items: AIOrganizeInstanceUpdate[]) {
           </svg>
         </button>
       </template>
-      将内置规则无法识别或置信度较低的作品交给 AI 补判，并在 STRM 刮削时中文化演员、角色、导演和编剧；调用失败时保留原有识别结果和 TMDB 原文。
+      将内置规则无法识别或置信度较低的作品交给 AI 补判，调用失败时自动回退原有识别流程。
       <template #actions>
         <AppButton size="sm" variant="secondary" :disabled="aiSaving" @click="openWorkspace">
           模型设置

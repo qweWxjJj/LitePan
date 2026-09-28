@@ -30,7 +30,6 @@ func (s *Service) GetSettings() Settings {
 	out.Fanart = s.settings.Bool(settings.KeyStrmScrapeFanart)
 	out.Actors = s.settings.Bool(settings.KeyStrmScrapeActors)
 	out.ClearLogo = s.settings.Bool(settings.KeyStrmScrapeClearLogo)
-	out.AIAssist = s.ai != nil && s.ai.Available()
 	proxy := mediaorganize.TmdbProxyFromSettings(enriched)
 	out.ProxyEnabled = proxy.Enabled
 	out.ProxyURL = proxy.URL

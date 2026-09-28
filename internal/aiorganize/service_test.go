@@ -117,49 +117,6 @@ func TestEnhanceValidatesAndCachesResult(t *testing.T) {
 	}
 }
 
-func TestTranslateMetadataUsesOneBatchAndValidatesResults(t *testing.T) {
-	calls := 0
-	svc := newTestService(t, func(r *http.Request) (*http.Response, error) {
-		calls++
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(body), `\"actor_name_0\"`) || !strings.Contains(string(body), `\"actor_role_0\"`) {
-			t.Fatalf("批量请求缺少演职员项目: %s", body)
-		}
-		return chatHTTPResponse(t, `{"items":[{"id":"actor_name_0","translated":"夏洛特·甘斯布"},{"id":"actor_role_0","translated":"乔"}]}`), nil
-	})
-
-	items, err := svc.TranslateMetadata(context.Background(), MetadataTranslationRequest{
-		Title: "女性瘾者：第一部", MediaType: "movie", TargetLanguage: "zh-CN",
-		Items: []MetadataTranslationItem{
-			{ID: "actor_name_0", Kind: "actor_name", Text: "Charlotte Gainsbourg"},
-			{ID: "actor_role_0", Kind: "character", Text: "Joe"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 || len(items) != 2 || items[0].Translated != "夏洛特·甘斯布" || items[1].Translated != "乔" {
-		t.Fatalf("翻译结果异常: calls=%d items=%+v", calls, items)
-	}
-}
-
-func TestParseMetadataTranslationResponseRejectsUnknownAndNullValues(t *testing.T) {
-	allowed := map[string]struct{}{"actor_name_0": {}}
-	if _, err := parseMetadataTranslationResponse(`{"items":[{"id":"invented","translated":"虚构"}]}`, allowed); err == nil {
-		t.Fatal("模型返回未知 id 时应拒绝")
-	}
-	items, err := parseMetadataTranslationResponse(`{"items":[{"id":"actor_name_0","translated":"<nil>"}]}`, allowed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("空值翻译应被过滤: %+v", items)
-	}
-}
-
 func TestEnhanceReportsBatchProgress(t *testing.T) {
 	svc := newTestService(t, func(_ *http.Request) (*http.Response, error) {
 		return chatHTTPResponse(t, `{"items":[{"work_id":"work_1","recognized":true,"title":"千与千寻","year":2001,"media_type":"movie"}]}`), nil

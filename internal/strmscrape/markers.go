@@ -33,20 +33,15 @@ type scrapeState struct {
 	EpLocal int    `json:"ep_local,omitempty"`
 	EpTMDB  int    `json:"ep_tmdb,omitempty"`
 	// 只记“TMDB 没有”不记“下载失败”，后者下轮要继续重试；手动刮削会重新请求并按最新结果覆写。
-	NoBackdrop               bool   `json:"no_backdrop,omitempty"`
-	NoLogo                   bool   `json:"no_logo,omitempty"`
-	NoActors                 bool   `json:"no_actors,omitempty"`
-	NoDirectors              bool   `json:"no_directors,omitempty"`
-	NoWriters                bool   `json:"no_writers,omitempty"`
-	PeopleTranslationVersion string `json:"people_translation_version,omitempty"`
+	NoBackdrop  bool `json:"no_backdrop,omitempty"`
+	NoLogo      bool `json:"no_logo,omitempty"`
+	NoActors    bool `json:"no_actors,omitempty"`
+	NoDirectors bool `json:"no_directors,omitempty"`
+	NoWriters   bool `json:"no_writers,omitempty"`
 }
 
 func (s scrapeState) hasOptionalGap() bool {
 	return s.NoBackdrop || s.NoLogo || s.NoActors || s.NoDirectors || s.NoWriters
-}
-
-func (s scrapeState) hasPersistentResult() bool {
-	return s.hasOptionalGap() || strings.TrimSpace(s.PeopleTranslationVersion) != ""
 }
 
 // terminal 表示不再是待刮削状态：done=已完结（带可选资源结论）、ended=用户设为完结。
@@ -76,10 +71,6 @@ func pendingMarkerPath(g workGroup) string {
 func syncOptionalAssetState(g workGroup, cfg Settings, info tmdbInfo, peopleSkipped bool) {
 	st, ok := readPendingState(g)
 	if ok && !isTerminalState(st.Status) {
-		if info.PeopleTranslationAttempted && st.PeopleTranslationVersion != peopleTranslationVersion {
-			st.PeopleTranslationVersion = peopleTranslationVersion
-			_ = writePendingState(g, st)
-		}
 		return
 	}
 	st.Status = PendingDone
@@ -88,10 +79,7 @@ func syncOptionalAssetState(g workGroup, cfg Settings, info tmdbInfo, peopleSkip
 	st.NoActors = cfg.Actors && (len(info.Actors) == 0 || peopleSkipped)
 	st.NoDirectors = cfg.Actors && (len(info.Directors) == 0 || peopleSkipped)
 	st.NoWriters = cfg.Actors && (len(info.Writers) == 0 || peopleSkipped)
-	if info.PeopleTranslationAttempted {
-		st.PeopleTranslationVersion = peopleTranslationVersion
-	}
-	if st.hasPersistentResult() {
+	if st.hasOptionalGap() {
 		_ = writePendingState(g, st)
 		return
 	}
@@ -260,8 +248,7 @@ func readJSONMarker(path string) (scrapeState, bool) {
 // finalizeAfterScrape：按集数/存疑决定保留或删除 pending，并写回 ep_local/ep_tmdb。
 func finalizeAfterScrape(g workGroup, mediaType string, epTMDB int, doubt bool) {
 	epLocal, epScraped := countTVEpisodeProgress(g)
-	previous, _ := readPendingState(g)
-	st := scrapeState{EpLocal: epLocal, EpTMDB: epTMDB, PeopleTranslationVersion: previous.PeopleTranslationVersion}
+	st := scrapeState{EpLocal: epLocal, EpTMDB: epTMDB}
 	if doubt {
 		st.Status = PendingDoubt
 		_ = writePendingState(g, st)
