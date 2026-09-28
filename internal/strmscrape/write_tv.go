@@ -32,6 +32,7 @@ type tmdbEpisodeDetail struct {
 	ID            int
 	Rating        float64
 	VoteCount     int
+	Actors        []tmdbActor
 	Directors     []tmdbPerson
 	Writers       []tmdbPerson
 }
@@ -181,7 +182,11 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 				if title == "" {
 					title = fmt.Sprintf("第 %d 集", ep.EpisodeNumber)
 				}
-				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount, ep.Directors, ep.Writers); err != nil {
+				episodeActors := buildNFOActors(client, ep.Actors)
+				for i := range episodeActors {
+					episodeActors[i].Type = "GuestStar"
+				}
+				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount, episodeActors, ep.Directors, ep.Writers); err != nil {
 					return episodeCount, fmt.Errorf("写入 S%02dE%02d NFO：%w", season, ep.EpisodeNumber, err)
 				}
 			} else if s.GetSettings().Actors {
@@ -273,6 +278,7 @@ func fetchSeasonDetail(ctx context.Context, client *tmdb.Client, tmdbID string, 
 			EpisodeType:   strings.ToLower(strings.TrimSpace(anyString(em["episode_type"]))),
 			Rating:        anyFloat64(em["vote_average"]),
 			VoteCount:     intValue(em["vote_count"]),
+			Actors:        decodeTMDBActors(map[string]any{"cast": em["guest_stars"]}, 0),
 		}
 		ep.Directors, ep.Writers = decodeTMDBCrew(map[string]any{"crew": em["crew"]})
 		if id := asInt(em["id"]); id != nil {

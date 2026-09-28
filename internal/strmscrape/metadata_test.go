@@ -330,10 +330,16 @@ func TestMovieNFOWritesTMDBRating(t *testing.T) {
 	raw := json.RawMessage(`{
 		"id": 11,
 		"title": "Star Wars",
+		"original_title": "Star Wars",
 		"release_date": "1977-05-25",
 		"overview": "A long time ago...",
 		"vote_average": 8.2,
-		"vote_count": 22061
+		"vote_count": 22061,
+		"imdb_id": "tt0076759",
+		"genres": [{"id": 12, "name": "冒险"}],
+		"production_companies": [{"id": 1, "name": "Lucasfilm"}],
+		"production_countries": [{"iso_3166_1": "US", "name": "United States of America"}],
+		"belongs_to_collection": {"id": 10, "name": "星球大战系列"}
 	}`)
 	info, err := decodeTMDBInfo(raw, MediaTypeMovie)
 	if err != nil {
@@ -344,7 +350,7 @@ func TestMovieNFOWritesTMDBRating(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "movie.nfo")
-	if err := writeWorkNFOWithRating(path, "movie", info.Title, info.TMDBID, info.Plot, info.Year, nil, nil, nil, info.Rating, info.VoteCount); err != nil {
+	if err := writeWorkNFOFromTMDB(path, "movie", info, nil); err != nil {
 		t.Fatalf("写 NFO 失败: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -356,6 +362,13 @@ func TestMovieNFOWritesTMDBRating(t *testing.T) {
 		`<rating name="themoviedb" max="10" default="true">`,
 		`<value>8.2</value>`,
 		`<votes>22061</votes>`,
+		`<originaltitle>Star Wars</originaltitle>`,
+		`<imdbid>tt0076759</imdbid>`,
+		`<genre>冒险</genre>`,
+		`<studio>Lucasfilm</studio>`,
+		`<set tmdbcolid="10">`,
+		`<name>星球大战系列</name>`,
+		`<uniqueid type="tmdb">11</uniqueid>`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("NFO 缺少 %q:\n%s", expected, text)
@@ -432,6 +445,7 @@ func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
 	text := string(data)
 	for _, expected := range []string{
 		`<director tmdbid="11">导演甲</director>`,
+		`<writer tmdbid="22">编剧甲</writer>`,
 		`<credits tmdbid="22">编剧甲</credits>`,
 		"<credits>编剧乙</credits>",
 	} {
@@ -439,7 +453,7 @@ func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
 			t.Fatalf("Emby NFO missing %q:\n%s", expected, text)
 		}
 	}
-	if strings.Contains(text, "<writer>") || strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") {
+	if strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") {
 		t.Fatalf("Emby NFO contains incompatible/null people tags:\n%s", text)
 	}
 }

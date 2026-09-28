@@ -32,7 +32,21 @@ type tmdbInfo struct {
 	Rating        float64
 	VoteCount     int
 	OriginalLang  string
+	ReleaseDate   string
+	EndDate       string
+	Status        string
+	IMDBID        string
+	TVDBID        string
+	Genres        []string
+	Studios       []string
+	Countries     []string
+	Collection    *tmdbCollection
 	CreditsLoaded bool
+}
+
+type tmdbCollection struct {
+	TMDBID string
+	Name   string
 }
 
 type tmdbActor struct {
@@ -214,13 +228,14 @@ func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year
 }
 
 func actorAppendResponse(mediaType string, enabled bool) []string {
+	out := []string{"external_ids"}
 	if !enabled {
-		return nil
+		return out
 	}
 	if mediaType == MediaTypeTV {
-		return []string{"aggregate_credits"}
+		return append(out, "aggregate_credits")
 	}
-	return []string{"credits"}
+	return append(out, "credits")
 }
 
 func pickTMDBScrapeMatch(results []map[string]any, year *int, mediaType, title string) (map[string]any, bool) {
@@ -273,10 +288,10 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	// 目标 NFO 不存在或不是标准 NFO（如压制组信息文件）都重写；后者直接覆盖。
 	if nfoWriteNeeded(overwrite, nfo) {
 		if mediaType == MediaTypeTV {
-			if err := writeWorkNFOWithRating(nfo, "tvshow", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Directors, info.Writers, info.Rating, info.VoteCount); err != nil {
+			if err := writeWorkNFOFromTMDB(nfo, "tvshow", info, actors); err != nil {
 				return 0, err
 			}
-		} else if err := writeWorkNFOWithRating(nfo, "movie", info.Title, info.TMDBID, info.Plot, info.Year, actors, info.Directors, info.Writers, info.Rating, info.VoteCount); err != nil {
+		} else if err := writeWorkNFOFromTMDB(nfo, "movie", info, actors); err != nil {
 			return 0, err
 		}
 	} else if cfg.Actors {
@@ -356,7 +371,7 @@ func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, c
 		if info.MediaType == MediaTypeTV {
 			creditsKey = "aggregate_credits"
 		}
-		info.Actors = decodeTMDBActors(payload[creditsKey], 20)
+		info.Actors = decodeTMDBActors(payload[creditsKey], 0)
 		info.Directors, info.Writers = decodeTMDBCrew(payload[creditsKey])
 	}
 	// 一次 images 请求同时完成原语言海报、无文字背景和 Logo 选择，避免分别请求。
@@ -749,8 +764,10 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 		epCount = *n
 	}
 	creditsKey := "credits"
+	studioSource := m["production_companies"]
 	if mediaType == MediaTypeTV {
 		creditsKey = "aggregate_credits"
+		studioSource = m["networks"]
 	}
 	_, creditsLoaded := m[creditsKey]
 	info := tmdbInfo{
@@ -766,13 +783,79 @@ func decodeTMDBInfo(raw json.RawMessage, mediaType string) (tmdbInfo, error) {
 		Rating:        anyFloat64(m["vote_average"]),
 		VoteCount:     intValue(m["vote_count"]),
 		OriginalLang:  strings.TrimSpace(anyString(m["original_language"])),
-		Actors:        decodeTMDBActors(m[creditsKey], 20),
+		ReleaseDate:   firstNonEmpty(anyString(m["release_date"]), anyString(m["first_air_date"])),
+		EndDate:       strings.TrimSpace(anyString(m["last_air_date"])),
+		Status:        strings.TrimSpace(anyString(m["status"])),
+		IMDBID:        firstNonEmpty(anyString(m["imdb_id"]), nestedString(m["external_ids"], "imdb_id")),
+		TVDBID:        nestedIDString(m["external_ids"], "tvdb_id"),
+		Genres:        decodeNamedValues(m["genres"]),
+		Studios:       decodeNamedValues(studioSource),
+		Countries:     decodeCountryValues(m["production_countries"]),
+		Actors:        decodeTMDBActors(m[creditsKey], 0),
 		Directors:     nil,
 		Writers:       nil,
 		CreditsLoaded: creditsLoaded,
 	}
+	if mediaType == MediaTypeMovie {
+		if collection, ok := m["belongs_to_collection"].(map[string]any); ok {
+			info.Collection = &tmdbCollection{TMDBID: valueIDString(collection["id"]), Name: strings.TrimSpace(anyString(collection["name"]))}
+			if info.Collection.TMDBID == "" || info.Collection.Name == "" {
+				info.Collection = nil
+			}
+		}
+	}
 	info.Directors, info.Writers = decodeTMDBCrew(m[creditsKey])
 	return info, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func nestedString(value any, key string) string {
+	m, _ := value.(map[string]any)
+	return strings.TrimSpace(anyString(m[key]))
+}
+
+func nestedIDString(value any, key string) string {
+	m, _ := value.(map[string]any)
+	return valueIDString(m[key])
+}
+
+func valueIDString(value any) string {
+	if id := asInt(value); id != nil && *id > 0 {
+		return strconv.Itoa(*id)
+	}
+	return strings.TrimSpace(anyString(value))
+}
+
+func decodeNamedValues(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if name := strings.TrimSpace(anyString(item["name"])); name != "" {
+			out = append(out, name)
+		}
+	}
+	return cleanPersonNames(out)
+}
+
+func decodeCountryValues(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if name := firstNonEmpty(anyString(item["name"]), anyString(item["iso_3166_1"])); name != "" {
+			out = append(out, name)
+		}
+	}
+	return cleanPersonNames(out)
 }
 
 func anyFloat64(v any) float64 {

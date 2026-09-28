@@ -315,7 +315,7 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		t.Fatalf("season nfo unexpected: %s", text)
 	}
 	epNFO := filepath.Join(root, "Show.S01E01.nfo")
-	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120, []tmdbPerson{{TMDBID: "1", Name: "杨磊"}}, []tmdbPerson{{TMDBID: "2", Name: "田良良"}}); err != nil {
+	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120, []nfoActor{{Name: "客串", Type: "GuestStar", TMDBID: "3"}}, []tmdbPerson{{TMDBID: "1", Name: "杨磊"}}, []tmdbPerson{{TMDBID: "2", Name: "田良良"}}); err != nil {
 		t.Fatal(err)
 	}
 	body, err = os.ReadFile(epNFO)
@@ -333,7 +333,10 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		`<rating name="themoviedb" max="10" default="true">`,
 		`<value>8.6</value>`,
 		`<votes>120</votes>`,
+		`<name>客串</name>`,
+		`<type>GuestStar</type>`,
 		`<director tmdbid="1">杨磊</director>`,
+		`<writer tmdbid="2">田良良</writer>`,
 		`<credits tmdbid="2">田良良</credits>`,
 	} {
 		if !strings.Contains(text, expected) {
