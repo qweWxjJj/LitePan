@@ -32,8 +32,8 @@ type tmdbEpisodeDetail struct {
 	ID            int
 	Rating        float64
 	VoteCount     int
-	Directors     []string
-	Writers       []string
+	Directors     []tmdbPerson
+	Writers       []tmdbPerson
 }
 
 type tmdbImageDownloader interface {
@@ -67,9 +67,9 @@ func (s *Service) writeOptionalArtwork(ctx context.Context, client tmdbImageDown
 	return true, nil
 }
 
-func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g workGroup, info tmdbInfo, overwrite bool) error {
+func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g workGroup, info tmdbInfo, overwrite bool) (int, error) {
 	if g.flatFile != "" || strings.TrimSpace(info.TMDBID) == "" {
-		return nil
+		return 0, nil
 	}
 	interval := time.Duration(s.GetSettings().TmdbRequestIntervalMS) * time.Millisecond
 	if interval < 200*time.Millisecond {
@@ -77,11 +77,6 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 	}
 
 	seasonDirs := listLocalSeasonDirs(g.absDir)
-	// 剧集根季海报（seasonXX-poster.jpg）
-	if err := s.writeSeasonPosters(ctx, client, g, info.TMDBID, overwrite, seasonDirs); err != nil {
-		return err
-	}
-
 	// 无 Season 目录时，按分集文件名里的季号补齐
 	seasonNums := map[int]string{} // season -> abs season dir (可空表示写在剧集根旁的虚拟季，仅写 seasonXX-poster)
 	for _, d := range seasonDirs {
@@ -97,7 +92,7 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 		}
 	}
 	if len(seasonNums) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	// 按 strm 建立 (s,e) -> path；目录季号与文件名冲突的跳过；同 key 先到先得
@@ -123,9 +118,10 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 	}
 	sort.Ints(nums)
 
+	episodeCount := 0
 	for i, season := range nums {
 		if err := ctx.Err(); err != nil {
-			return err
+			return episodeCount, err
 		}
 		show := strings.TrimSpace(info.Title)
 		if show == "" {
@@ -139,23 +135,32 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 		}
 		detail, err := fetchSeasonDetail(ctx, client, info.TMDBID, season)
 		if err != nil {
-			return fmt.Errorf("获取第 %d 季详情：%w", season, err)
+			return episodeCount, fmt.Errorf("获取第 %d 季详情：%w", season, err)
 		}
 		if detail == nil {
-			return fmt.Errorf("获取第 %d 季详情：返回为空", season)
+			return episodeCount, fmt.Errorf("获取第 %d 季详情：返回为空", season)
+		}
+		if season > 0 {
+			episodeCount += effectiveSeasonEpisodeCount(detail, len(detail.Episodes))
+		}
+		rootSeasonPoster := seasonPosterPath(g.absDir, season)
+		if (overwrite || !fileExists(rootSeasonPoster)) && detail.PosterPath != "" {
+			if _, err := s.writeOptionalArtwork(ctx, client, detail.PosterPath, rootSeasonPoster, fmt.Sprintf("第 %d 季海报", season)); err != nil {
+				return episodeCount, err
+			}
 		}
 		seasonDir := seasonNums[season]
 		if seasonDir != "" {
 			seasonNFO := filepath.Join(seasonDir, "season.nfo")
 			if overwrite || !fileExists(seasonNFO) {
 				if err := writeSeasonNFO(seasonNFO, season, detail.Name, detail.Overview, detail.AirDate); err != nil {
-					return fmt.Errorf("写入第 %d 季 NFO：%w", season, err)
+					return episodeCount, fmt.Errorf("写入第 %d 季 NFO：%w", season, err)
 				}
 			}
 			seasonPoster := filepath.Join(seasonDir, "poster.jpg")
 			if (overwrite || !fileExists(seasonPoster)) && detail.PosterPath != "" {
 				if _, err := s.writeOptionalArtwork(ctx, client, detail.PosterPath, seasonPoster, fmt.Sprintf("第 %d 季目录海报", season)); err != nil {
-					return err
+					return episodeCount, err
 				}
 			}
 		}
@@ -177,7 +182,7 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 					title = fmt.Sprintf("第 %d 集", ep.EpisodeNumber)
 				}
 				if err := writeEpisodeNFO(epNFO, title, info.Title, ep.Overview, ep.AirDate, tmdbEpID, season, ep.EpisodeNumber, ep.Rating, ep.VoteCount, ep.Directors, ep.Writers); err != nil {
-					return fmt.Errorf("写入 S%02dE%02d NFO：%w", season, ep.EpisodeNumber, err)
+					return episodeCount, fmt.Errorf("写入 S%02dE%02d NFO：%w", season, ep.EpisodeNumber, err)
 				}
 			} else if s.GetSettings().Actors {
 				if err := appendNFOPeople(epNFO, nil, ep.Directors, ep.Writers); err != nil && s.log != nil {
@@ -187,14 +192,14 @@ func (s *Service) writeTVExtras(ctx context.Context, client *tmdb.Client, g work
 			thumb := stem + "-thumb.jpg"
 			if (overwrite || !fileExists(thumb)) && ep.StillPath != "" {
 				if _, err := s.writeOptionalArtwork(ctx, client, ep.StillPath, thumb, fmt.Sprintf("S%02dE%02d 缩略图", season, ep.EpisodeNumber)); err != nil {
-					return err
+					return episodeCount, err
 				}
 				time.Sleep(interval)
 			}
 		}
 		// TMDB 未收录的本地集不写占位 nfo：短剧等保持「缺失」，由用户「设为完结」结束
 	}
-	return nil
+	return episodeCount, nil
 }
 
 type seasonDir struct {

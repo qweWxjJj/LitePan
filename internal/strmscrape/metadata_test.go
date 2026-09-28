@@ -169,8 +169,8 @@ func TestSyncOptionalAssetState(t *testing.T) {
 	t.Run("TMDB 有资源时删除文件", func(t *testing.T) {
 		g := newCompleteMovieWork(t)
 		writeDoneState(t, g)
-		info := tmdbInfo{TMDBID: "76600", BackdropPath: "/b.jpg", LogoPath: "/l.png", Directors: []string{"James Cameron"}, Writers: []string{"James Cameron"}}
-		info.Actors = []tmdbActor{{Name: "Sam Worthington"}}
+		info := tmdbInfo{TMDBID: "76600", BackdropPath: "/b.jpg", LogoPath: "/l.png", Directors: []tmdbPerson{{Name: "James Cameron"}}, Writers: []tmdbPerson{{Name: "James Cameron"}}}
+		info.Actors = []tmdbActor{{Name: "Sam Worthington", ProfilePath: "/sam.jpg"}}
 		syncOptionalAssetState(g, allOptionalEnabled(), info, false)
 		if _, ok := readPendingState(g); ok {
 			t.Fatalf("无缺失结论时不应保留标记文件")
@@ -378,11 +378,8 @@ func TestDecodeTMDBActorsHandlesAggregateCreditsNullFields(t *testing.T) {
 	}
 
 	actors := decodeTMDBActors(credits, 20)
-	if len(actors) != 1 {
-		t.Fatalf("actors=%+v", actors)
-	}
-	if actors[0].Name != "测试演员" || actors[0].Role != "测试角色" || actors[0].ProfilePath != "" {
-		t.Fatalf("聚合演员字段解析错误: %+v", actors[0])
+	if len(actors) != 0 {
+		t.Fatalf("无头像演员应被过滤: %+v", actors)
 	}
 
 	path := filepath.Join(t.TempDir(), "tvshow.nfo")
@@ -394,9 +391,9 @@ func TestDecodeTMDBActorsHandlesAggregateCreditsNullFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, expected := range []string{"<name>测试演员</name>", "<role>测试角色</role>"} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("NFO 缺少 %q:\n%s", expected, text)
+	for _, unexpected := range []string{"<actor>", "<name>测试演员</name>", "<role>测试角色</role>"} {
+		if strings.Contains(text, unexpected) {
+			t.Fatalf("NFO 不应包含无头像演员 %q:\n%s", unexpected, text)
 		}
 	}
 	if strings.Contains(text, "&lt;nil&gt;") || strings.Contains(text, "<nil>") || strings.Contains(text, "<thumb>") {
@@ -408,9 +405,9 @@ func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
 	var credits any
 	if err := json.Unmarshal([]byte(`{
 		"crew": [
-			{"name":"导演甲","job":"Director","department":"Directing"},
-			{"name":"导演甲","job":"Director","department":"Directing"},
-			{"name":"编剧甲","job":"Screenplay","department":"Writing"},
+			{"id":11,"name":"导演甲","job":"Director","department":"Directing","profile_path":"/director.jpg"},
+			{"id":11,"name":"导演甲","job":"Director","department":"Directing"},
+			{"id":22,"name":"编剧甲","job":"Screenplay","department":"Writing","profile_path":"/writer.jpg"},
 			{"name":"编剧乙","jobs":[{"job":"Writer"},{"job":"Story"}],"department":"Writing"},
 			{"name":null,"job":"Director"},
 			{"name":"<nil>","job":"Writer"}
@@ -420,7 +417,7 @@ func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
 	}
 
 	directors, writers := decodeTMDBCrew(credits)
-	if strings.Join(directors, ",") != "导演甲" || strings.Join(writers, ",") != "编剧甲,编剧乙" {
+	if len(directors) != 1 || directors[0].Name != "导演甲" || directors[0].TMDBID != "11" || len(writers) != 2 || writers[0].Name != "编剧甲" || writers[0].TMDBID != "22" || writers[1].Name != "编剧乙" {
 		t.Fatalf("crew decode directors=%v writers=%v", directors, writers)
 	}
 
@@ -434,8 +431,8 @@ func TestDecodeTMDBCrewAndWriteEmbyTags(t *testing.T) {
 	}
 	text := string(data)
 	for _, expected := range []string{
-		"<director>导演甲</director>",
-		"<credits>编剧甲</credits>",
+		`<director tmdbid="11">导演甲</director>`,
+		`<credits tmdbid="22">编剧甲</credits>`,
 		"<credits>编剧乙</credits>",
 	} {
 		if !strings.Contains(text, expected) {
@@ -454,8 +451,8 @@ func TestAppendNFOPeoplePreservesCustomFieldsAndOnlyFillsMissing(t *testing.T) {
 	}
 	if err := appendNFOPeople(path,
 		[]nfoActor{{Name: "新演员"}},
-		[]string{"新导演"},
-		[]string{"新编剧", "新编剧", "<nil>"},
+		[]tmdbPerson{{Name: "新导演"}},
+		[]tmdbPerson{{Name: "新编剧"}, {Name: "新编剧"}, {Name: "<nil>"}},
 	); err != nil {
 		t.Fatal(err)
 	}

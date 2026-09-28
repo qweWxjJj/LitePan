@@ -315,7 +315,7 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		t.Fatalf("season nfo unexpected: %s", text)
 	}
 	epNFO := filepath.Join(root, "Show.S01E01.nfo")
-	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120, []string{"杨磊"}, []string{"田良良"}); err != nil {
+	if err := writeEpisodeNFO(epNFO, "开端", "三体", "本集简介", "2023-01-15", "123", 1, 1, 8.6, 120, []tmdbPerson{{TMDBID: "1", Name: "杨磊"}}, []tmdbPerson{{TMDBID: "2", Name: "田良良"}}); err != nil {
 		t.Fatal(err)
 	}
 	body, err = os.ReadFile(epNFO)
@@ -333,8 +333,8 @@ func TestWriteSeasonAndEpisodeNFO(t *testing.T) {
 		`<rating name="themoviedb" max="10" default="true">`,
 		`<value>8.6</value>`,
 		`<votes>120</votes>`,
-		`<director>杨磊</director>`,
-		`<credits>田良良</credits>`,
+		`<director tmdbid="1">杨磊</director>`,
+		`<credits tmdbid="2">田良良</credits>`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("episode nfo missing %q: %s", expected, text)
@@ -400,10 +400,10 @@ func TestWriteMatchedAddsFanartAndActors(t *testing.T) {
 		switch r.URL.Path {
 		case "/3/movie/1":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":1,"title":"测试电影","overview":"简介","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","credits":{"cast":[{"name":"演员甲","character":"角色甲","profile_path":"/actor.jpg","order":0}]}}`))
+			_, _ = w.Write([]byte(`{"id":1,"title":"测试电影","overview":"简介","original_language":"ja","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","credits":{"cast":[{"id":7,"name":"演员甲","character":"角色甲","profile_path":"/actor.jpg","order":0}]}}`))
 		case "/3/movie/1/images":
-			_, _ = w.Write([]byte(`{"logos":[{"file_path":"/en.png","iso_639_1":"en"},{"file_path":"/zh.png","iso_639_1":"zh"}]}`))
-		case "/t/p/original/poster.jpg", "/t/p/original/backdrop.jpg", "/t/p/original/zh.png":
+			_, _ = w.Write([]byte(`{"logos":[{"file_path":"/en.png","iso_639_1":"en"},{"file_path":"/ja.png","iso_639_1":"ja"},{"file_path":"/zh.png","iso_639_1":"zh"}]}`))
+		case "/t/p/original/poster.jpg", "/t/p/original/backdrop.jpg", "/t/p/original/ja.png":
 			_, _ = w.Write([]byte("image"))
 		default:
 			http.NotFound(w, r)
@@ -440,14 +440,14 @@ func TestWriteMatchedAddsFanartAndActors(t *testing.T) {
 		t.Fatal("应生成详情页背景图")
 	}
 	if !fileExists(filepath.Join(movie, "clearlogo.png")) {
-		t.Fatal("应按搜索语言优先生成 clearlogo.png")
+		t.Fatal("应按作品原语言优先生成 clearlogo.png")
 	}
 	nfo, err := os.ReadFile(filepath.Join(movie, "测试电影.nfo"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(nfo)
-	for _, expected := range []string{"<custom>保留</custom>", "<actor>", "<name>演员甲</name>", "<role>角色甲</role>", server.URL + "/t/p/w185/actor.jpg"} {
+	for _, expected := range []string{"<custom>保留</custom>", "<actor>", "<name>演员甲</name>", "<role>角色甲</role>", "<type>Actor</type>", "<tmdbid>7</tmdbid>", server.URL + "/t/p/original/actor.jpg"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("NFO 缺少 %q：%s", expected, text)
 		}
@@ -461,7 +461,7 @@ func TestEnrichFanartReusesLoadedDetail(t *testing.T) {
 		BackdropPath: "/already-loaded.jpg",
 	}
 	// client 故意传 nil：仅启用 fanart 时必须复用已加载的电影详情，不能再次请求详情接口。
-	got, err := enrichTMDBExtras(context.Background(), nil, info, Settings{Fanart: true})
+	got, err := enrichTMDBExtras(context.Background(), nil, info, Settings{Fanart: true}, false)
 	if err != nil {
 		t.Fatalf("复用详情失败: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,8 @@ type tmdbInfo struct {
 	PosterPath    string
 	BackdropPath  string
 	Actors        []tmdbActor
-	Directors     []string
-	Writers       []string
+	Directors     []tmdbPerson
+	Writers       []tmdbPerson
 	LogoPath      string
 	MediaType     string
 	Doubt         bool
@@ -35,10 +36,17 @@ type tmdbInfo struct {
 }
 
 type tmdbActor struct {
+	TMDBID      string
 	Name        string
 	Role        string
 	ProfilePath string
 	Order       int
+}
+
+type tmdbPerson struct {
+	TMDBID      string
+	Name        string
+	ProfilePath string
 }
 
 func (s *Service) matchWork(ctx context.Context, client *tmdb.Client, g workGroup) (*tmdbInfo, error) {
@@ -237,8 +245,11 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		mediaType = inferMediaType(g)
 		info.MediaType = mediaType
 	}
-	if cfg.Fanart || cfg.Actors || cfg.ClearLogo {
-		info, err = enrichTMDBExtras(ctx, client, info, cfg)
+	_, currentPoster := workMetaPaths(g, mediaType)
+	needImages := overwrite || !fileExists(currentPoster) ||
+		(cfg.Fanart && !workHasFanart(g)) || (cfg.ClearLogo && !workHasClearLogo(g))
+	if cfg.Actors || needImages {
+		info, err = enrichTMDBExtras(ctx, client, info, cfg, needImages)
 		if err != nil {
 			return 0, err
 		}
@@ -246,11 +257,6 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	epTMDB = 0
 	if withTVExtras {
 		epTMDB = info.EpisodeCount
-	}
-	if withTVExtras && mediaType == MediaTypeTV && g.flatFile == "" && strings.TrimSpace(info.TMDBID) != "" {
-		if n, cerr := tmdbEpisodeCountForLocalSeasons(ctx, client, g, info.TMDBID); cerr == nil && n > 0 {
-			epTMDB = n
-		}
 	}
 	epLocal, _ := countTVEpisodeProgress(g)
 	if err := writePendingState(g, scrapeState{
@@ -302,8 +308,10 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 		}
 	}
 	if withTVExtras && needTVExtras {
-		if err := s.writeTVExtras(ctx, client, g, info, overwrite); err != nil {
+		if n, err := s.writeTVExtras(ctx, client, g, info, overwrite); err != nil {
 			return epTMDB, fmt.Errorf("补写季/集元数据失败：%w", err)
+		} else if n > 0 {
+			epTMDB = n
 		}
 	}
 	// 异步补季/集时由调用方 finalize；此处同步路径直接收尾
@@ -322,7 +330,7 @@ func (s *Service) writeMatchedOpts(ctx context.Context, client *tmdb.Client, g w
 	return epTMDB, nil
 }
 
-func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, cfg Settings) (tmdbInfo, error) {
+func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, cfg Settings, needImages bool) (tmdbInfo, error) {
 	var payload map[string]any
 	if cfg.Actors && !info.CreditsLoaded {
 		appendTo := []string{}
@@ -351,61 +359,100 @@ func enrichTMDBExtras(ctx context.Context, client *tmdb.Client, info tmdbInfo, c
 		info.Actors = decodeTMDBActors(payload[creditsKey], 20)
 		info.Directors, info.Writers = decodeTMDBCrew(payload[creditsKey])
 	}
-	if cfg.ClearLogo {
+	// 一次 images 请求同时完成原语言海报、无文字背景和 Logo 选择，避免分别请求。
+	if needImages && strings.TrimSpace(info.TMDBID) != "" {
 		images, imageErr := client.FetchImages(ctx, info.TMDBID, info.MediaType)
 		if imageErr != nil {
-			return info, fmt.Errorf("获取 TMDB Logo：%w", imageErr)
+			// 图片列表是原语言优选的增强信息。失败时沿用详情接口返回的图片，
+			// 不让一项可选资源阻断 NFO 和已有图片的生成。
+			return info, nil
 		}
-		info.LogoPath = selectTMDBLogo(images, cfg.TmdbLanguage, info.OriginalLang)
+		info.PosterPath = selectTMDBArtwork(images, "posters", info.OriginalLang, false, info.PosterPath)
+		if cfg.Fanart {
+			info.BackdropPath = selectTMDBArtwork(images, "backdrops", "", false, info.BackdropPath)
+		}
+		if cfg.ClearLogo {
+			info.LogoPath = selectTMDBLogo(images, info.OriginalLang)
+		}
 	}
 	return info, nil
 }
 
-func selectTMDBLogo(raw json.RawMessage, preferred, original string) string {
-	var payload struct {
-		Logos []struct {
-			FilePath string  `json:"file_path"`
-			Language *string `json:"iso_639_1"`
-		} `json:"logos"`
-	}
+func selectTMDBLogo(raw json.RawMessage, original string) string {
+	return selectTMDBArtwork(raw, "logos", original, true, "")
+}
+
+type tmdbArtworkCandidate struct {
+	FilePath    string  `json:"file_path"`
+	Language    *string `json:"iso_639_1"`
+	VoteAverage float64 `json:"vote_average"`
+	VoteCount   int     `json:"vote_count"`
+	Width       int     `json:"width"`
+	Height      int     `json:"height"`
+}
+
+// selectTMDBArtwork 先按语言语义选组，再在组内按有效投票、评分和像素面积排序。
+// 原语言优先；无文字图片其次；英文再次；zh 仅在作品原语言为中文或没有其他图片时使用。
+func selectTMDBArtwork(raw json.RawMessage, kind, original string, pngOnly bool, fallback string) string {
+	var payload map[string]json.RawMessage
 	if json.Unmarshal(raw, &payload) != nil {
-		return ""
+		return strings.TrimSpace(fallback)
 	}
-	language := func(value string) string {
+	var candidates []tmdbArtworkCandidate
+	if json.Unmarshal(payload[kind], &candidates) != nil {
+		return strings.TrimSpace(fallback)
+	}
+	normalizeLanguage := func(value string) string {
 		value = strings.ToLower(strings.TrimSpace(value))
 		if i := strings.IndexAny(value, "-_"); i >= 0 {
 			value = value[:i]
 		}
 		return value
 	}
-	wantedLanguages := make([]string, 0, 4)
-	seenLanguages := map[string]bool{}
-	for _, value := range []string{language(preferred), language(original), "en"} {
-		if value == "" || seenLanguages[value] {
+	original = normalizeLanguage(original)
+	languageRank := func(candidate tmdbArtworkCandidate) int {
+		actual := ""
+		if candidate.Language != nil {
+			actual = normalizeLanguage(*candidate.Language)
+		}
+		switch {
+		case original != "" && actual == original:
+			return 0
+		case actual == "":
+			return 1
+		case actual == "en":
+			return 2
+		case actual == "zh":
+			return 4
+		default:
+			return 3
+		}
+	}
+	filtered := candidates[:0]
+	for _, candidate := range candidates {
+		candidate.FilePath = strings.TrimSpace(candidate.FilePath)
+		if candidate.FilePath == "" || (pngOnly && !strings.EqualFold(filepath.Ext(candidate.FilePath), ".png")) {
 			continue
 		}
-		seenLanguages[value] = true
-		wantedLanguages = append(wantedLanguages, value)
+		filtered = append(filtered, candidate)
 	}
-	for _, wanted := range append(wantedLanguages, "") {
-		for _, logo := range payload.Logos {
-			actual := ""
-			if logo.Language != nil {
-				actual = language(*logo.Language)
-			}
-			path := strings.TrimSpace(logo.FilePath)
-			if actual == wanted && strings.EqualFold(filepath.Ext(path), ".png") {
-				return path
-			}
+	if len(filtered) == 0 {
+		return strings.TrimSpace(fallback)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		leftRank, rightRank := languageRank(filtered[i]), languageRank(filtered[j])
+		if leftRank != rightRank {
+			return leftRank < rightRank
 		}
-	}
-	for _, logo := range payload.Logos {
-		path := strings.TrimSpace(logo.FilePath)
-		if strings.EqualFold(filepath.Ext(path), ".png") {
-			return path
+		if filtered[i].VoteCount != filtered[j].VoteCount {
+			return filtered[i].VoteCount > filtered[j].VoteCount
 		}
-	}
-	return ""
+		if filtered[i].VoteAverage != filtered[j].VoteAverage {
+			return filtered[i].VoteAverage > filtered[j].VoteAverage
+		}
+		return filtered[i].Width*filtered[i].Height > filtered[j].Width*filtered[j].Height
+	})
+	return filtered[0].FilePath
 }
 
 func decodeTMDBActors(raw any, limit int) []tmdbActor {
@@ -418,7 +465,9 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 	for _, value := range cast {
 		item, _ := value.(map[string]any)
 		name := cleanPersonText(item["name"])
-		if name == "" {
+		profilePath := cleanPersonText(item["profile_path"])
+		// 演员数量通常较多；TMDB 没有头像的演员不写入 NFO，避免空白人物卡片。
+		if name == "" || profilePath == "" {
 			continue
 		}
 		role := cleanPersonText(item["character"])
@@ -433,7 +482,13 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 		if parsed := asInt(item["order"]); parsed != nil {
 			order = *parsed
 		}
-		out = append(out, tmdbActor{Name: name, Role: role, ProfilePath: cleanPersonText(item["profile_path"]), Order: order})
+		out = append(out, tmdbActor{
+			TMDBID:      personTMDBID(item),
+			Name:        name,
+			Role:        role,
+			ProfilePath: profilePath,
+			Order:       order,
+		})
 		if len(out) == limit {
 			break
 		}
@@ -441,7 +496,7 @@ func decodeTMDBActors(raw any, limit int) []tmdbActor {
 	return out
 }
 
-func decodeTMDBCrew(raw any) (directors, writers []string) {
+func decodeTMDBCrew(raw any) (directors, writers []tmdbPerson) {
 	credits, _ := raw.(map[string]any)
 	crew, _ := credits["crew"].([]any)
 	directorSeen := map[string]struct{}{}
@@ -471,11 +526,12 @@ func decodeTMDBCrew(raw any) (directors, writers []string) {
 				isWriter = true
 			}
 		}
+		person := tmdbPerson{TMDBID: personTMDBID(item), Name: name, ProfilePath: cleanPersonText(item["profile_path"])}
 		if isDirector {
-			directors = appendUniquePerson(directors, directorSeen, name)
+			directors = appendUniqueTMDBPerson(directors, directorSeen, person)
 		}
 		if isWriter {
-			writers = appendUniquePerson(writers, writerSeen, name)
+			writers = appendUniqueTMDBPerson(writers, writerSeen, person)
 		}
 	}
 	return directors, writers
@@ -489,8 +545,15 @@ func cleanPersonText(value any) string {
 	return text
 }
 
-func appendUniquePerson(values []string, seen map[string]struct{}, name string) []string {
-	key := strings.ToLower(strings.TrimSpace(name))
+func personTMDBID(item map[string]any) string {
+	if id := asInt(item["id"]); id != nil && *id > 0 {
+		return strconv.Itoa(*id)
+	}
+	return ""
+}
+
+func appendUniqueTMDBPerson(values []tmdbPerson, seen map[string]struct{}, person tmdbPerson) []tmdbPerson {
+	key := "name:" + strings.ToLower(strings.TrimSpace(person.Name))
 	if key == "" {
 		return values
 	}
@@ -498,13 +561,23 @@ func appendUniquePerson(values []string, seen map[string]struct{}, name string) 
 		return values
 	}
 	seen[key] = struct{}{}
-	return append(values, strings.TrimSpace(name))
+	if person.TMDBID != "" {
+		seen["id:"+strings.TrimSpace(person.TMDBID)] = struct{}{}
+	}
+	person.Name = strings.TrimSpace(person.Name)
+	return append(values, person)
 }
 
 func buildNFOActors(client *tmdb.Client, actors []tmdbActor) []nfoActor {
 	out := make([]nfoActor, 0, len(actors))
 	for _, actor := range actors {
-		out = append(out, nfoActor{Name: actor.Name, Role: actor.Role, Order: actor.Order, Thumb: client.ImageURL(actor.ProfilePath, "w185")})
+		if strings.TrimSpace(actor.ProfilePath) == "" {
+			continue
+		}
+		out = append(out, nfoActor{
+			Name: actor.Name, Role: actor.Role, Type: "Actor", TMDBID: actor.TMDBID,
+			Order: actor.Order, Thumb: client.ImageURL(actor.ProfilePath, artworkDownloadSize),
+		})
 	}
 	return out
 }
